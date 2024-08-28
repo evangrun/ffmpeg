@@ -19,6 +19,8 @@
 #ifndef AVCODEC_MF_UTILS_H
 #define AVCODEC_MF_UTILS_H
 
+#include "config.h"
+
 #include <windows.h>
 #include <initguid.h>
 #ifdef _MSC_VER
@@ -40,6 +42,10 @@
 #include <mfobjects.h>
 #include <mftransform.h>
 
+#if CONFIG_D3D11VA
+#include <d3d11.h>
+#endif
+
 #include "avcodec.h"
 
 // Windows N editions does not provide MediaFoundation by default.
@@ -52,6 +58,13 @@ typedef struct MFFunctions {
                                                    DWORD cbAligment,
                                                    IMFMediaBuffer **ppBuffer);
     HRESULT (WINAPI *MFCreateSample) (IMFSample **ppIMFSample);
+#if CONFIG_D3D11VA
+    HRESULT (WINAPI *MFCreateDXGISurfaceBuffer) (REFIID riid,
+                                                    IUnknown* punkSurface, 
+                                                    UINT uSubresourceIndex, 
+                                                    BOOL fBottomUpWhenLinear, 
+                                                    IMFMediaBuffer** ppBuffer);
+#endif
     HRESULT (WINAPI *MFCreateMediaType) (IMFMediaType **ppMFType);
     // MFTEnumEx is missing in Windows Vista's mfplat.dll.
     HRESULT (WINAPI *MFTEnumEx)(GUID guidCategory, UINT32 Flags,
@@ -168,6 +181,7 @@ char *ff_hr_str_buf(char *buf, size_t size, HRESULT hr);
 
 IMFSample *ff_create_memory_sample(MFFunctions *f, void *fill_data,
                                    size_t size, size_t align);
+IMFSample* ff_create_direct3d11_memory_sample(MFFunctions* f, ID3D11Texture2D* texture);
 enum AVSampleFormat ff_media_type_to_sample_fmt(IMFAttributes *type);
 enum AVPixelFormat ff_media_type_to_pix_fmt(IMFAttributes *type);
 const GUID *ff_pix_fmt_to_guid(enum AVPixelFormat pix_fmt);

@@ -70,6 +70,27 @@ char *ff_hr_str_buf(char *buf, size_t size, HRESULT hr)
     return buf;
 }
 
+#if CONFIG_D3D11VA
+IMFSample* ff_create_direct3d11_memory_sample(MFFunctions* f, ID3D11Texture2D* texture)
+{
+    HRESULT hr;
+    IMFSample* sample;
+    IMFMediaBuffer* buffer;
+
+    hr = f->MFCreateDXGISurfaceBuffer(&IID_ID3D11Texture2D, (IUnknown *)texture, 0, FALSE, &buffer);
+    if (FAILED(hr))
+        return NULL;
+
+    hr = f->MFCreateSample(&sample);
+    if (FAILED(hr))
+        return NULL;
+
+    IMFSample_AddBuffer(sample, buffer);
+    IMFMediaBuffer_Release(buffer);
+
+    return sample;
+}
+#endif 
 // If fill_data!=NULL, initialize the buffer and set the length. (This is a
 // subtle but important difference: some decoders want CurrentLength==0 on
 // provided output buffers.)

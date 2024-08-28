@@ -28,6 +28,10 @@
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
+#if CONFIG_D3D11VA
+#include "libavutil/hwcontext_d3d11va.h"
+#include "libavcodec/decode.h"
+#endif
 #include "codec_internal.h"
 #include "internal.h"
 #include "compat/w32dlfcn.h"
@@ -306,43 +310,63 @@ static IMFSample *mf_a_avframe_to_sample(AVCodecContext *avctx, const AVFrame *f
 static IMFSample *mf_v_avframe_to_sample(AVCodecContext *avctx, const AVFrame *frame)
 {
     MFContext *c = avctx->priv_data;
-    IMFSample *sample;
+    IMFSample *sample = NULL;
     IMFMediaBuffer *buffer;
     BYTE *data;
     HRESULT hr;
     int ret;
     int size;
 
-    size = av_image_get_buffer_size(avctx->pix_fmt, avctx->width, avctx->height, 1);
-    if (size < 0)
-        return NULL;
+#if CONFIG_D3D11VA
+    if (frame->format == AV_PIX_FMT_D3D11) {
+        AVD3D11FrameDescriptor* descriptor;
+        AVBufferRef *reference = (AVBufferRef*)frame->buf[0];
+        if(NULL == reference)  {
+            av_log(avctx, AV_LOG_ERROR, "Invalid frame data, no texture present in buf[0].\n");
+            return NULL;
+        }
+        descriptor = (AVD3D11FrameDescriptor*)(reference->data);
 
-    sample = ff_create_memory_sample(&c->functions, NULL, size,
-                                     c->in_info.cbAlignment);
-    if (!sample)
-        return NULL;
-
-    hr = IMFSample_GetBufferByIndex(sample, 0, &buffer);
-    if (FAILED(hr)) {
-        IMFSample_Release(sample);
-        return NULL;
+        sample = ff_create_direct3d11_memory_sample(&c->functions, descriptor->texture);
+        if (!sample) {
+            av_log(avctx, AV_LOG_ERROR, "Failed to add a HW Frame to the buffer.\n");
+            return NULL;
+        }
     }
+    else
+#endif
+    {
+        size = av_image_get_buffer_size(avctx->sw_pix_fmt, avctx->width, avctx->height, 1);
+        if (size < 0)
+            return NULL;
 
-    hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL);
-    if (FAILED(hr)) {
+        sample = ff_create_memory_sample(&c->functions, NULL, size,
+                                         c->in_info.cbAlignment);
+        if (!sample)
+            return NULL;
+
+        hr = IMFSample_GetBufferByIndex(sample, 0, &buffer);
+        if (FAILED(hr)) {
+            IMFSample_Release(sample);
+            return NULL;
+        }
+
+        hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL);
+        if (FAILED(hr)) {
+            IMFMediaBuffer_Release(buffer);
+            IMFSample_Release(sample);
+            return NULL;
+        }
+
+        ret = av_image_copy_to_buffer((uint8_t *)data, size, (void *)frame->data, frame->linesize,
+            avctx->sw_pix_fmt, avctx->width, avctx->height, 1);
+        IMFMediaBuffer_SetCurrentLength(buffer, size);
+        IMFMediaBuffer_Unlock(buffer);
         IMFMediaBuffer_Release(buffer);
-        IMFSample_Release(sample);
-        return NULL;
-    }
-
-    ret = av_image_copy_to_buffer((uint8_t *)data, size, (void *)frame->data, frame->linesize,
-                                  avctx->pix_fmt, avctx->width, avctx->height, 1);
-    IMFMediaBuffer_SetCurrentLength(buffer, size);
-    IMFMediaBuffer_Unlock(buffer);
-    IMFMediaBuffer_Release(buffer);
-    if (ret < 0) {
-        IMFSample_Release(sample);
-        return NULL;
+        if (ret < 0) {
+            IMFSample_Release(sample);
+            return NULL;
+        }
     }
 
     IMFSample_SetSampleDuration(sample, mf_to_mf_time(avctx, frame->duration));
@@ -667,6 +691,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #endif
     }
 
+#if CONFIG_D3D11VA
+    if (avctx->hw_device_ctx) IMFAttributes_SetUINT32(type, &MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+#endif    
+
     ff_MFSetAttributeRatio((IMFAttributes *)type, &MF_MT_FRAME_RATE, framerate.num, framerate.den);
 
     // (MS HEVC supports eAVEncH265VProfile_Main_420_8 only.)
@@ -732,7 +760,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
 static int64_t mf_encv_input_score(AVCodecContext *avctx, IMFMediaType *type)
 {
     enum AVPixelFormat pix_fmt = ff_media_type_to_pix_fmt((IMFAttributes *)type);
-    if (pix_fmt != avctx->pix_fmt)
+
+    if (pix_fmt != avctx->sw_pix_fmt)
         return -1; // can not use
 
     return 0;
@@ -741,7 +770,7 @@ static int64_t mf_encv_input_score(AVCodecContext *avctx, IMFMediaType *type)
 static int mf_encv_input_adjust(AVCodecContext *avctx, IMFMediaType *type)
 {
     enum AVPixelFormat pix_fmt = ff_media_type_to_pix_fmt((IMFAttributes *)type);
-    if (pix_fmt != avctx->pix_fmt) {
+    if (pix_fmt != avctx->sw_pix_fmt) {
         av_log(avctx, AV_LOG_ERROR, "unsupported input pixel format set\n");
         return AVERROR(EINVAL);
     }
@@ -983,7 +1012,7 @@ static int mf_setup_context(AVCodecContext *avctx)
     return 0;
 }
 
-static int mf_unlock_async(AVCodecContext *avctx)
+static int mf_unlock_async(AVCodecContext *avctx, int useHW)
 {
     MFContext *c = avctx->priv_data;
     HRESULT hr;
@@ -993,8 +1022,10 @@ static int mf_unlock_async(AVCodecContext *avctx)
 
     // For hw encoding we unfortunately need to use async mode, otherwise
     // play it safe and avoid it.
-    if (!(c->is_video && c->opt_enc_hw))
+    if (!(useHW))
+   {
         return 0;
+    }
 
     hr = IMFTransform_GetAttributes(c->mft, &attrs);
     if (FAILED(hr)) {
@@ -1067,6 +1098,9 @@ static int mf_init_encoder(AVCodecContext *avctx)
     MFContext *c = avctx->priv_data;
     HRESULT hr;
     int ret;
+#if CONFIG_D3D11VA
+    AVHWFramesContext* hw_context;
+#endif
     const CLSID *subtype = ff_codec_to_mf_subtype(avctx->codec_id);
     int use_hw = 0;
 
@@ -1081,6 +1115,17 @@ static int mf_init_encoder(AVCodecContext *avctx)
     if (c->is_video && c->opt_enc_hw)
         use_hw = 1;
 
+    /* map formats */
+    avctx->sw_pix_fmt = avctx->pix_fmt;
+#if CONFIG_D3D11VA
+    if( (avctx->hw_frames_ctx == NULL) && (avctx->pix_fmt == AV_PIX_FMT_D3D11)) {
+        av_log(avctx, AV_LOG_ERROR, "You need to set the hw_frames_ctx with HW encoding\n");
+        return AVERROR(EINVAL);
+    }
+    hw_context = (AVHWFramesContext*)(avctx->hw_frames_ctx->data);
+    avctx->sw_pix_fmt = hw_context->sw_format;
+#endif
+
     if (!subtype)
         return AVERROR(ENOSYS);
 
@@ -1089,13 +1134,12 @@ static int mf_init_encoder(AVCodecContext *avctx)
     if ((ret = mf_create(avctx, &c->functions, &c->mft, avctx->codec, use_hw)) < 0)
         return ret;
 
-    if ((ret = mf_unlock_async(avctx)) < 0)
+    if ((ret = mf_unlock_async(avctx, use_hw)) < 0)
         return ret;
-
+    
     hr = IMFTransform_QueryInterface(c->mft, &IID_ICodecAPI, (void **)&c->codec_api);
     if (!FAILED(hr))
         av_log(avctx, AV_LOG_VERBOSE, "MFT supports ICodecAPI.\n");
-
 
     hr = IMFTransform_GetStreamIDs(c->mft, 1, &c->in_stream_id, 1, &c->out_stream_id);
     if (hr == E_NOTIMPL) {
@@ -1105,6 +1149,7 @@ static int mf_init_encoder(AVCodecContext *avctx)
         return AVERROR_EXTERNAL;
     }
 
+    /* find the correct inpit and output types */
     if ((ret = mf_negotiate_types(avctx)) < 0)
         return ret;
 
@@ -1192,6 +1237,9 @@ static int mf_load_library(AVCodecContext *avctx)
     LOAD_MF_FUNCTION(c, MFCreateAlignedMemoryBuffer);
     LOAD_MF_FUNCTION(c, MFCreateSample);
     LOAD_MF_FUNCTION(c, MFCreateMediaType);
+#if CONFIG_D3D11VA
+    LOAD_MF_FUNCTION(c, MFCreateDXGISurfaceBuffer);
+#endif
     // MFTEnumEx is missing in Windows Vista's mfplat.dll.
     LOAD_MF_FUNCTION(c, MFTEnumEx);
 
@@ -1305,10 +1353,17 @@ static const FFCodecDefault defaults[] = {
     { NULL },
 };
 
+#if CONFIG_D3D11VA
 #define VFMTS \
+        .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_D3D11,      \
+                                                        AV_PIX_FMT_NV12,       \
+                                                        AV_PIX_FMT_YUV420P,    \
+                                                        AV_PIX_FMT_NONE },
+#else
         .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_NV12,       \
                                                         AV_PIX_FMT_YUV420P,    \
                                                         AV_PIX_FMT_NONE },
+#endif
 #define VCAPS \
         .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HYBRID |           \
                           AV_CODEC_CAP_DR1,
