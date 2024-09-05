@@ -147,6 +147,7 @@ static void guess_palette(DVDSubContext* ctx,
                           uint32_t *rgba_palette,
                           uint32_t subtitle_color)
 {
+
     static const uint8_t level_map[4][4] = {
         // this configuration (full range, lowest to highest) in tests
         // seemed most common, so assume this
@@ -208,6 +209,7 @@ static void reset_rects(AVSubtitle *sub_header)
         for (i = 0; i < sub_header->num_rects; i++) {
             av_freep(&sub_header->rects[i]->data[0]);
             av_freep(&sub_header->rects[i]->data[1]);
+            av_freep(&sub_header->rects[i]->data[2]);
             av_freep(&sub_header->rects[i]);
         }
         av_freep(&sub_header->rects);
@@ -224,6 +226,7 @@ static int decode_dvd_subtitles(DVDSubContext *ctx, AVSubtitle *sub_header,
     int big_offsets, offset_size, is_8bit = 0;
     const uint8_t *yuv_palette = NULL;
     uint8_t *colormap = ctx->colormap, *alpha = ctx->alpha;
+    uint8_t* index;
     int date;
     int i;
     int is_menu = 0;
@@ -298,7 +301,6 @@ static int decode_dvd_subtitles(DVDSubContext *ctx, AVSubtitle *sub_header,
                 alpha[1] = buf[pos + 1] >> 4;
                 alpha[0] = buf[pos + 1] & 0x0f;
                 pos += 2;
-                ff_dlog(NULL, "alpha=%x%x%x%x\n", alpha[0],alpha[1],alpha[2],alpha[3]);
                 break;
             case 0x05:
             case 0x85:
@@ -388,8 +390,11 @@ static int decode_dvd_subtitles(DVDSubContext *ctx, AVSubtitle *sub_header,
                                buf, offset2, buf_size, is_8bit) < 0)
                     goto fail;
                 sub_header->rects[0]->data[1] = av_mallocz(AVPALETTE_SIZE);
-                if (!sub_header->rects[0]->data[1])
+                sub_header->rects[0]->data[2] = av_mallocz(AVPALETTE_SIZE);
+                if ((!sub_header->rects[0]->data[1]) || (!sub_header->rects[0]->data[2]))
                     goto fail;
+                /* copy the indices over, and the alpha */
+                index = sub_header->rects[0]->data[2];
                 if (is_8bit) {
                     if (!yuv_palette)
                         goto fail;
@@ -397,10 +402,20 @@ static int decode_dvd_subtitles(DVDSubContext *ctx, AVSubtitle *sub_header,
                     yuv_a_to_rgba(yuv_palette, alpha,
                                   (uint32_t *)sub_header->rects[0]->data[1],
                                   256);
+                    /* set index to 0 */
+                    for (int i = 0; i < 256; i++) {
+                        index[i] = i;
+                        index[i + 256] = alpha[i];
+                    }
                 } else {
                     sub_header->rects[0]->nb_colors = 4;
                     guess_palette(ctx, (uint32_t*)sub_header->rects[0]->data[1],
                                   0xffffff);
+                    /* copy index and alpha */
+                    for (int i = 0; i < 4; i++) {
+                        index[i] = colormap[i];
+                        index[i + 4] = alpha[i];
+                    }
                 }
                 sub_header->rects[0]->x = x1;
                 sub_header->rects[0]->y = y1;
