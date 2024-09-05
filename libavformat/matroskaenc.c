@@ -786,6 +786,8 @@ static int end_ebml_master_crc32(AVIOContext *pb, AVIOContext **dyn_cp,
     int ret, size, skip = 0;
 
     size = avio_get_dyn_buf(*dyn_cp, &buf);
+    if(NULL == dyn_cp)
+        goto fail;
     if ((ret = (*dyn_cp)->error) < 0)
         goto fail;
 
@@ -3163,7 +3165,7 @@ static int mkv_write_trailer(AVFormatContext *s)
     int ret, ret2 = 0;
 
     // check if we have an audio packet cached
-    if (mkv->cur_audio_pkt->size > 0) {
+    if ((mkv->cur_audio_pkt) && (mkv->cur_audio_pkt->size > 0)) {
         ret = mkv_write_packet_internal(s, mkv->cur_audio_pkt);
         if (ret < 0) {
             av_log(s, AV_LOG_ERROR,
