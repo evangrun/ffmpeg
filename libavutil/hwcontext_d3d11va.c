@@ -24,7 +24,7 @@
 
 #include <initguid.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_5.h>
 
 #if HAVE_DXGIDEBUG_H
 #include <dxgidebug.h>
@@ -234,7 +234,7 @@ static AVBufferRef *d3d11va_alloc_single(AVHWFramesContext *ctx)
 
     hr = ID3D11Device_CreateTexture2D(device_hwctx->device, &texDesc, NULL, &tex);
     if (FAILED(hr)) {
-        av_log(ctx, AV_LOG_ERROR, "Could not create the texture (%lx)\n", (long)hr);
+        av_log(ctx, AV_LOG_ERROR, "Could not create a texture in d3d11va_alloc_single (%lx)\n", (long)hr);
         return NULL;
     }
 
@@ -313,7 +313,7 @@ static int d3d11va_frames_init(AVHWFramesContext *ctx)
     } else if (!(texDesc.BindFlags & D3D11_BIND_RENDER_TARGET) && texDesc.ArraySize > 0) {
         hr = ID3D11Device_CreateTexture2D(device_hwctx->device, &texDesc, NULL, &hwctx->texture);
         if (FAILED(hr)) {
-            av_log(ctx, AV_LOG_ERROR, "Could not create the texture (%lx)\n", (long)hr);
+            av_log(ctx, AV_LOG_ERROR, "Could not create the texture in d3d11va_frames_init (%lx)\n", (long)hr);
             return AVERROR_UNKNOWN;
         }
     }
@@ -566,17 +566,17 @@ static int d3d11va_device_find_adapter_by_vendor_id(AVHWDeviceContext *ctx, uint
 {
     HRESULT hr;
     IDXGIAdapter *adapter = NULL;
-    IDXGIFactory2 *factory;
+    IDXGIFactory5 *factory;
     int adapter_id = 0;
     long int id = strtol(vendor_id, NULL, 0);
 
-    hr = mCreateDXGIFactory(&IID_IDXGIFactory2, (void **)&factory);
+    hr = mCreateDXGIFactory(&IID_IDXGIFactory5, (void **)&factory);
     if (FAILED(hr)) {
         av_log(ctx, AV_LOG_ERROR, "CreateDXGIFactory returned error\n");
         return -1;
     }
 
-    while (IDXGIFactory2_EnumAdapters(factory, adapter_id++, &adapter) != DXGI_ERROR_NOT_FOUND) {
+    while (IDXGIFactory5_EnumAdapters(factory, adapter_id++, &adapter) != DXGI_ERROR_NOT_FOUND) {
         ID3D11Device* device = NULL;
         DXGI_ADAPTER_DESC adapter_desc;
 
@@ -594,12 +594,12 @@ static int d3d11va_device_find_adapter_by_vendor_id(AVHWDeviceContext *ctx, uint
             av_log(ctx, AV_LOG_DEBUG, "IDXGIAdapter2_GetDesc returned error, try next adapter\n");
             continue;
         } else if (adapter_desc.VendorId == id) {
-            IDXGIFactory2_Release(factory);
+            IDXGIFactory5_Release(factory);
             return adapter_id - 1;
         }
     }
 
-    IDXGIFactory2_Release(factory);
+    IDXGIFactory5_Release(factory);
     return -1;
 }
 
@@ -643,14 +643,14 @@ static int d3d11va_device_create(AVHWDeviceContext *ctx, const char *device,
     }
 
     if (adapter >= 0) {
-        IDXGIFactory2 *pDXGIFactory;
+        IDXGIFactory5 *pDXGIFactory;
 
         av_log(ctx, AV_LOG_VERBOSE, "Selecting d3d11va adapter %d\n", adapter);
-        hr = mCreateDXGIFactory(&IID_IDXGIFactory2, (void **)&pDXGIFactory);
+        hr = mCreateDXGIFactory(&IID_IDXGIFactory5, (void **)&pDXGIFactory);
         if (SUCCEEDED(hr)) {
-            if (FAILED(IDXGIFactory2_EnumAdapters(pDXGIFactory, adapter, &pAdapter)))
+            if (FAILED(IDXGIFactory5_EnumAdapters(pDXGIFactory, adapter, &pAdapter)))
                 pAdapter = NULL;
-            IDXGIFactory2_Release(pDXGIFactory);
+            IDXGIFactory5_Release(pDXGIFactory);
         }
     }
 
