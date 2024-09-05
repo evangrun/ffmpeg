@@ -86,14 +86,12 @@ static int check_disc_info(URLContext *h)
 
     /* BD+ */
     if (disc_info->bdplus_detected && !disc_info->bdplus_handled) {
-        /*
         if (!disc_info->libbdplus_detected) {
             av_log(h, AV_LOG_ERROR,
                    "Media stream encrypted with BD+, install and configure libbdplus");
         } else {
-        */
             av_log(h, AV_LOG_ERROR, "Unable to decrypt BD+ encrypted media\n");
-        /*}*/
+        }
         return -1;
     }
 
@@ -139,13 +137,15 @@ static int bluray_open(URLContext *h, const char *path, int flags)
 
     /* load title list */
     num_title_idx = bd_get_titles(bd->bd, TITLES_RELEVANT, MIN_PLAYLIST_LENGTH);
-    av_log(h, AV_LOG_INFO, "%d usable playlists:\n", num_title_idx);
+    av_log(h, AV_LOG_INFO, "%d usable playlists.\n", num_title_idx);
     if (num_title_idx < 1) {
         return AVERROR(EIO);
     }
 
     /* if playlist was not given, select longest playlist */
     if (bd->playlist < 0) {
+        av_log(h, AV_LOG_INFO, "No playlist selected, selecting longest one.\n");
+
         uint64_t duration = 0;
         int i;
         for (i = 0; i < num_title_idx; i++) {
@@ -166,6 +166,8 @@ static int bluray_open(URLContext *h, const char *path, int flags)
         }
         av_log(h, AV_LOG_INFO, "selected %05d.mpls\n", bd->playlist);
     }
+
+    av_log(h, AV_LOG_INFO, "Selecting playlist %d.\n", bd->playlist);
 
     /* select playlist */
     if (bd_select_playlist(bd->bd, bd->playlist) <= 0) {
