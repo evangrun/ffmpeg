@@ -177,40 +177,42 @@ static int decode_rle(AVCodecContext *avctx, AVSubtitleRect *rect,
 
     while (buf < rle_bitmap_end && line_count < rect->h) {
         uint8_t flags, color;
-        int run;
+        uint32_t run;
 
         color = bytestream_get_byte(&buf);
         run   = 1;
 
         if (color == 0x00) {
             flags = bytestream_get_byte(&buf);
-            run   = flags & 0x3f;
-            if (flags & 0x40)
-                run = (run << 8) + bytestream_get_byte(&buf);
-            color = flags & 0x80 ? bytestream_get_byte(&buf) : 0;
+            if (flags == 0x00) {
+                run = 0;    /* new line */
+            }
+            else
+            {
+                run = flags & 0x3f;
+                if (flags & 0x40) {
+                    run = (run << 8) + bytestream_get_byte(&buf);
+                }
+                color = flags & 0x80 ? bytestream_get_byte(&buf) : 0;
+            }
         }
 
         if (run > 0 && pixel_count + run <= rect->w * rect->h) {
             memset(rect->data[0] + pixel_count, color, run);
             pixel_count += run;
         } else if (!run) {
-            /*
-             * New Line. Check if correct pixels decoded, if not display warning
-             * and adjust bitmap pointer to correct new line position.
-             */
-            if (pixel_count % rect->w > 0) {
-                av_log(avctx, AV_LOG_ERROR, "Decoded %d pixels, when line should be %d pixels\n",
-                       pixel_count % rect->w, rect->w);
-                if (avctx->err_recognition & AV_EF_EXPLODE) {
-                    return AVERROR_INVALIDDATA;
-                }
-            }
+            /* New Line. */
             line_count++;
+            /* set the pixel count */
+            pixel_count = line_count * rect->w;
         }
     }
 
-    if (pixel_count < rect->w * rect->h) {
-        av_log(avctx, AV_LOG_ERROR, "Insufficient RLE data for subtitle\n");
+    if (pixel_count != rect->w * rect->h) {
+        av_log(avctx, AV_LOG_ERROR, "Bad RLE data for subtitle, " \
+                    "decoded %d pixels, %d lines,  " \
+                    "expected %d pixels, %d lines.\n",
+                    pixel_count, line_count, rect->w * rect->h, rect->h);
         return AVERROR_INVALIDDATA;
     }
 
@@ -236,7 +238,7 @@ static int parse_object_segment(AVCodecContext *avctx,
     PGSSubObject *object;
 
     uint8_t sequence_desc;
-    unsigned int rle_bitmap_len, width, height;
+    unsigned int rle_bitmap_len;
     int id;
 
     if (buf_size <= 4)
@@ -244,6 +246,7 @@ static int parse_object_segment(AVCodecContext *avctx,
     buf_size -= 4;
 
     id = bytestream_get_be16(&buf);
+
     object = find_object(id, &ctx->objects);
     if (!object) {
         if (ctx->objects.count >= MAX_EPOCH_OBJECTS) {
@@ -260,10 +263,31 @@ static int parse_object_segment(AVCodecContext *avctx,
     /* Read the Sequence Description to determine if start of RLE data or appended to previous RLE */
     sequence_desc = bytestream_get_byte(&buf);
 
-    if (!(sequence_desc & 0x80)) {
-        /* Additional RLE data */
-        if (buf_size > object->rle_remaining_len)
+    /*  0x40: Last in sequence
+        0x80: First in sequence: only one where width and height are according to patent
+        0xC0: First and last in sequence (0x40 | 0x80)
+    */
+    if (sequence_desc & 0x80) {
+        /* First and last in sequence */
+        if (buf_size <= 7) {
+            av_log(avctx, AV_LOG_ERROR, "Input buffer does not contain enough data.\n");
             return AVERROR_INVALIDDATA;
+        }
+        buf_size -= 7;
+
+        /* Decode rle bitmap length, stored size includes width/height data */
+        rle_bitmap_len = bytestream_get_be24(&buf);
+    
+        /* this lengthg includes with and height */
+        rle_bitmap_len -= 4;
+    }
+    else
+    if (sequence_desc & 0x40) {  
+        /* Last in sequence, additional RLE data */
+        if (buf_size > object->rle_remaining_len) {
+            av_log(avctx, AV_LOG_ERROR, "Input buffer contains to much RLE data for bitmap.\n");
+            return AVERROR_INVALIDDATA;
+        }
 
         memcpy(object->rle + object->rle_data_len, buf, buf_size);
         object->rle_data_len += buf_size;
@@ -272,35 +296,17 @@ static int parse_object_segment(AVCodecContext *avctx,
         return 0;
     }
 
-    if (buf_size <= 7)
-        return AVERROR_INVALIDDATA;
-    buf_size -= 7;
-
-    /* Decode rle bitmap length, stored size includes width/height data */
-    rle_bitmap_len = bytestream_get_be24(&buf) - 2*2;
-
     if (buf_size > rle_bitmap_len) {
-        av_log(avctx, AV_LOG_ERROR,
-               "Buffer dimension %d larger than the expected RLE data %d\n",
-               buf_size, rle_bitmap_len);
+        av_log(avctx, AV_LOG_ERROR, "Input buffer contains to much RLE data for bitmap.\n");
         return AVERROR_INVALIDDATA;
     }
 
     /* Get bitmap dimensions from data */
-    width  = bytestream_get_be16(&buf);
-    height = bytestream_get_be16(&buf);
+    object->w  = bytestream_get_be16(&buf);
+    object->h  = bytestream_get_be16(&buf);
 
-    /* Make sure the bitmap is not too large */
-    if (avctx->width < width || avctx->height < height || !width || !height) {
-        av_log(avctx, AV_LOG_ERROR, "Bitmap dimensions (%dx%d) invalid.\n", width, height);
-        return AVERROR_INVALIDDATA;
-    }
-
-    object->w = width;
-    object->h = height;
-
+    /* (re-)allocate the RLE buffer if needed */
     av_fast_padded_malloc(&object->rle, &object->rle_buffer_size, rle_bitmap_len);
-
     if (!object->rle) {
         object->rle_data_len = 0;
         object->rle_remaining_len = 0;
@@ -372,6 +378,7 @@ static int parse_palette_segment(AVCodecContext *avctx,
         /* Store color in palette */
         palette->clut[color_id] = RGBA(r,g,b,alpha);
     }
+
     return 0;
 }
 
@@ -400,11 +407,14 @@ static int parse_presentation_segment(AVCodecContext *avctx,
 
     ctx->presentation.pts = pts;
 
-    ff_dlog(avctx, "Video Dimensions %dx%d\n",
-            w, h);
+    ff_dlog(avctx, "Video Dimensions %dx%d\n", w, h);
+
     ret = ff_set_dimensions(avctx, w, h);
     if (ret < 0)
+    {
+        av_log(avctx, AV_LOG_ERROR, "Invalid size for subtitle: %d %d\n", w, h);
         return ret;
+    }
 
     /* Skip 1 bytes of unknown, frame rate */
     buf++;
@@ -420,8 +430,8 @@ static int parse_presentation_segment(AVCodecContext *avctx,
      *
      * reserved 6 bits discarded
      */
-    state = bytestream_get_byte(&buf) >> 6;
-    if (state != 0) {
+    state = bytestream_get_byte(&buf);
+    if ((state >> 6) != 0) {
         flush_cache(avctx);
     }
 
@@ -441,7 +451,6 @@ static int parse_presentation_segment(AVCodecContext *avctx,
         }
     }
 
-
     for (i = 0; i < ctx->presentation.object_count; i++)
     {
         PGSSubObjectRef *const object = &ctx->presentation.objects[i];
@@ -459,7 +468,7 @@ static int parse_presentation_segment(AVCodecContext *avctx,
         object->x = bytestream_get_be16(&buf);
         object->y = bytestream_get_be16(&buf);
 
-        // If cropping
+        /* If cropping */
         if (object->composition_flag & 0x80) {
             object->crop_x = bytestream_get_be16(&buf);
             object->crop_y = bytestream_get_be16(&buf);
@@ -507,86 +516,92 @@ static int display_end_segment(AVCodecContext *avctx, AVSubtitle *sub,
     sub->pts = pts;
     ctx->presentation.pts = AV_NOPTS_VALUE;
     sub->start_display_time = 0;
-    // There is no explicit end time for PGS subtitles.  The end time
-    // is defined by the start of the next sub which may contain no
-    // objects (i.e. clears the previous sub)
-    sub->end_display_time   = UINT32_MAX;
-    sub->format             = 0;
+    sub->format = 0;
+    /* There is no explicit end time for PGS subtitles.The end time
+    *  is defined by the start of the next sub which may contain no
+    *  objects (i.e. clears the previous sub) 
+    *  So always emit, but emit no rectangles when we want to
+    *  tell the user tp clear the prvious rect */
+    sub->end_display_time   = 0;
 
-    // Blank if last object_count was 0.
-    if (!ctx->presentation.object_count)
-        return 1;
-    sub->rects = av_calloc(ctx->presentation.object_count, sizeof(*sub->rects));
-    if (!sub->rects) {
-        return AVERROR(ENOMEM);
-    }
-    palette = find_palette(ctx->presentation.palette_id, &ctx->palettes);
-    if (!palette) {
-        // Missing palette.  Should only happen with damaged streams.
-        av_log(avctx, AV_LOG_ERROR, "Invalid palette id %d\n",
-               ctx->presentation.palette_id);
-        avsubtitle_free(sub);
-        return AVERROR_INVALIDDATA;
-    }
-    for (i = 0; i < ctx->presentation.object_count; i++) {
-        AVSubtitleRect *const rect = av_mallocz(sizeof(*rect));
-        PGSSubObject *object;
-
-        if (!rect)
+    // Blank the previous sub if last object_count was 0.
+    if (ctx->presentation.object_count)
+    {
+        sub->rects = av_calloc(ctx->presentation.object_count, sizeof(*sub->rects));
+        if (!sub->rects) {
             return AVERROR(ENOMEM);
-        sub->rects[sub->num_rects++] = rect;
-        rect->type = SUBTITLE_BITMAP;
-
-        /* Process bitmap */
-        object = find_object(ctx->presentation.objects[i].id, &ctx->objects);
-        if (!object) {
-            // Missing object.  Should only happen with damaged streams.
-            av_log(avctx, AV_LOG_ERROR, "Invalid object id %d\n",
-                   ctx->presentation.objects[i].id);
-            if (avctx->err_recognition & AV_EF_EXPLODE)
-                return AVERROR_INVALIDDATA;
-            // Leaves rect empty with 0 width and height.
-            continue;
         }
-        if (ctx->presentation.objects[i].composition_flag & 0x40)
-            rect->flags |= AV_SUBTITLE_FLAG_FORCED;
 
-        rect->x    = ctx->presentation.objects[i].x;
-        rect->y    = ctx->presentation.objects[i].y;
+        palette = find_palette(ctx->presentation.palette_id, &ctx->palettes);
+        if (!palette) {
+            // Missing palette.  Should only happen with damaged streams.
+            av_log(avctx, AV_LOG_ERROR, "Invalid palette id %d\n",
+                   ctx->presentation.palette_id);
+            avsubtitle_free(sub);
+            return AVERROR_INVALIDDATA;
+        }
+        for (i = 0; i < ctx->presentation.object_count; i++) {
+            PGSSubObject *object;
 
-        if (object->rle) {
-            rect->w    = object->w;
-            rect->h    = object->h;
+            AVSubtitleRect* const rect = av_mallocz(sizeof(*rect));
+            if (!rect)
+                return AVERROR(ENOMEM);
+            sub->rects[sub->num_rects++] = rect;
+            rect->type = SUBTITLE_BITMAP;
 
-            rect->linesize[0] = object->w;
-
-            if (object->rle_remaining_len) {
-                av_log(avctx, AV_LOG_ERROR, "RLE data length %u is %u bytes shorter than expected\n",
-                       object->rle_data_len, object->rle_remaining_len);
+            /* Process bitmap */
+            object = find_object(ctx->presentation.objects[i].id, &ctx->objects);
+            if (!object) {
+                // Missing object.  Should only happen with damaged streams.
+                av_log(avctx, AV_LOG_ERROR, "Invalid object id %d\n",
+                       ctx->presentation.objects[i].id);
                 if (avctx->err_recognition & AV_EF_EXPLODE)
                     return AVERROR_INVALIDDATA;
-            }
-            ret = decode_rle(avctx, rect, object->rle, object->rle_data_len);
-            if (ret < 0) {
-                if ((avctx->err_recognition & AV_EF_EXPLODE) ||
-                    ret == AVERROR(ENOMEM)) {
-                    return ret;
-                }
-                rect->w = 0;
-                rect->h = 0;
+                // Leaves rect empty with 0 width and height.
                 continue;
             }
-        }
-        /* Allocate memory for colors */
-        rect->nb_colors = 256;
-        rect->data[1]   = av_mallocz(AVPALETTE_SIZE);
-        if (!rect->data[1])
-            return AVERROR(ENOMEM);
+            if (ctx->presentation.objects[i].composition_flag & 0x40)
+                rect->flags |= AV_SUBTITLE_FLAG_FORCED;
 
-        if (!ctx->forced_subs_only || ctx->presentation.objects[i].composition_flag & 0x40)
-            memcpy(rect->data[1], palette->clut, rect->nb_colors * sizeof(uint32_t));
+            rect->x    = ctx->presentation.objects[i].x;
+            rect->y    = ctx->presentation.objects[i].y;
+
+            if (object->rle) {
+                rect->w    = object->w;
+                rect->h    = object->h;
+
+                rect->linesize[0] = object->w;
+
+                if (object->rle_remaining_len) {
+                    av_log(avctx, AV_LOG_ERROR, "RLE data length %u is %u bytes shorter than expected\n",
+                           object->rle_data_len, object->rle_remaining_len);
+                    if (avctx->err_recognition & AV_EF_EXPLODE)
+                        return AVERROR_INVALIDDATA;
+                }
+                ret = decode_rle(avctx, rect, object->rle, object->rle_data_len);
+                if (ret < 0) {
+                    if ((avctx->err_recognition & AV_EF_EXPLODE) ||
+                        ret == AVERROR(ENOMEM)) {
+                        return ret;
+                    }
+                    rect->w = 0;
+                    rect->h = 0;
+                    continue;
+                }
+            }
+            /* Allocate memory for colors */
+            rect->nb_colors = 256;
+            rect->data[1]   = av_mallocz(AVPALETTE_SIZE);
+            if (!rect->data[1])
+                return AVERROR(ENOMEM);
+
+            if (!ctx->forced_subs_only || ctx->presentation.objects[i].composition_flag & 0x40)
+                memcpy(rect->data[1], palette->clut, rect->nb_colors * sizeof(uint32_t));
+        }
     }
+
     return 1;
+
 }
 
 static int decode(AVCodecContext *avctx, AVSubtitle *sub,
@@ -668,8 +683,10 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
         }
         if (ret < 0 && (ret == AVERROR(ENOMEM) ||
                         avctx->err_recognition & AV_EF_EXPLODE))
+        {
+            av_log(avctx, AV_LOG_ERROR, "Error decoding\n");
             return ret;
-
+        }
         buf += segment_length;
     }
 
