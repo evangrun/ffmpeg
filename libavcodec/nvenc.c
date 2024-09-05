@@ -2174,13 +2174,15 @@ static int nvenc_find_free_reg_resource(AVCodecContext *avctx)
 
 static int nvenc_register_frame(AVCodecContext *avctx, const AVFrame *frame)
 {
+    intptr_t resourceToRegister;
+
     NvencContext *ctx = avctx->priv_data;
     NvencDynLoadFunctions *dl_fn = &ctx->nvenc_dload_funcs;
     NV_ENCODE_API_FUNCTION_LIST *p_nvenc = &dl_fn->nvenc_funcs;
 
-    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
     NV_ENC_REGISTER_RESOURCE reg = { 0 };
-    int i, idx, ret;
+    int i, idx, ret;    
 
     for (i = 0; i < ctx->nb_registered_frames; i++) {
         if (avctx->pix_fmt == AV_PIX_FMT_CUDA && ctx->registered_frames[i].ptr == frame->data[0])
@@ -2197,15 +2199,19 @@ static int nvenc_register_frame(AVCodecContext *avctx, const AVFrame *frame)
     reg.width              = frames_ctx->width;
     reg.height             = frames_ctx->height;
     reg.pitch              = frame->linesize[0];
-    reg.resourceToRegister = frame->data[0];
 
+    resourceToRegister = (intptr_t)frame->data[0];
     if (avctx->pix_fmt == AV_PIX_FMT_CUDA) {
         reg.resourceType   = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
+        resourceToRegister = (intptr_t)frame->data[0];  //  is this correct?
     }
     else if (avctx->pix_fmt == AV_PIX_FMT_D3D11) {
+        AVD3D11FrameDescriptor* descriptor = (AVD3D11FrameDescriptor*)(frame->buf[0]->data);
         reg.resourceType     = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
-        reg.subResourceIndex = (intptr_t)frame->data[1];
+        reg.subResourceIndex = descriptor->index;
+        resourceToRegister   = (intptr_t)descriptor->texture;
     }
+    reg.resourceToRegister = (void *)resourceToRegister;
 
     reg.bufferFormat       = nvenc_map_buffer_format(frames_ctx->sw_format);
     if (reg.bufferFormat == NV_ENC_BUFFER_FORMAT_UNDEFINED) {
@@ -2220,7 +2226,7 @@ static int nvenc_register_frame(AVCodecContext *avctx, const AVFrame *frame)
         return AVERROR_UNKNOWN;
     }
 
-    ctx->registered_frames[idx].ptr       = frame->data[0];
+    ctx->registered_frames[idx].ptr       = (void*)resourceToRegister;
     ctx->registered_frames[idx].ptr_index = reg.subResourceIndex;
     ctx->registered_frames[idx].regptr    = reg.registeredResource;
     return idx;
