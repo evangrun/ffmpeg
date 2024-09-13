@@ -30,6 +30,7 @@
 #include "mpegvideodec.h"
 
 #define MAX_SLICES 1024
+
 struct dxva2_picture_context {
     DXVA_PictureParameters pp;
     DXVA_QmatrixData       qm;
@@ -193,12 +194,19 @@ static int commit_bitstream_and_slice_buffer(AVCodecContext *avctx,
     current = dxva_data;
     end = dxva_data + dxva_size;
 
+    //  check bitstream
+    if(NULL == ctx_pic->bitstream)
+    {
+        av_log(avctx, AV_LOG_ERROR, "Invalid bitstream");
+        return -1;
+    }
+
     for (i = 0; i < ctx_pic->slice_count; i++) {
         DXVA_SliceInfo *slice = &ctx_pic->slice[i];
         unsigned position = slice->dwSliceDataLocation;
         unsigned size     = slice->dwSliceBitsInBuffer / 8;
         if (size > end - current) {
-            av_log(avctx, AV_LOG_ERROR, "Failed to build bitstream");
+            av_log(avctx, AV_LOG_ERROR, "Failed to build bitstream.\n");
             break;
         }
         slice->dwSliceDataLocation = current - dxva_data;
@@ -287,17 +295,16 @@ static int dxva2_mpeg2_decode_slice(AVCodecContext *avctx,
     unsigned position;
 
     if (ctx_pic->slice_count >= MAX_SLICES) {
-        avpriv_request_sample(avctx, "%d slices in dxva2",
-                              ctx_pic->slice_count);
+        avpriv_request_sample(avctx, "%d slices in dxva2, to much", ctx_pic->slice_count);
         return -1;
     }
-    if (!ctx_pic->bitstream)
+    if (!ctx_pic->bitstream) {
         ctx_pic->bitstream = buffer;
+    }
     ctx_pic->bitstream_size += size;
 
     position = buffer - ctx_pic->bitstream;
-    ff_dxva2_mpeg2_fill_slice(avctx, &ctx_pic->slice[ctx_pic->slice_count++], position,
-               buffer, size);
+    ff_dxva2_mpeg2_fill_slice(avctx, &ctx_pic->slice[ctx_pic->slice_count++], position, buffer, size);
     return 0;
 }
 
