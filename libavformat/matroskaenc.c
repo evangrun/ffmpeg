@@ -3143,7 +3143,7 @@ static int mkv_write_flush_packet(AVFormatContext *s, AVPacket *pkt)
 {
     MatroskaMuxContext *mkv = s->priv_data;
 
-    if (!pkt) {
+    if ((!pkt) && (mkv)) {
         if (mkv->cluster_pos != -1) {
             int ret = mkv_end_cluster(s);
             if (ret < 0)
@@ -3163,6 +3163,9 @@ static int mkv_write_trailer(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     int64_t endpos, ret64;
     int ret, ret2 = 0;
+
+    if (mkv == NULL)
+        return AVERROR(EINVAL);
 
     // check if we have an audio packet cached
     if ((mkv->cur_audio_pkt) && (mkv->cur_audio_pkt->size > 0)) {
