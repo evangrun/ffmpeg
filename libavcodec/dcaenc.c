@@ -220,7 +220,10 @@ static int encode_init(AVCodecContext *avctx)
     c->consumed_adpcm_bits = 0;
 
     if (ff_dcaadpcm_init(&c->adpcm_ctx))
+    {
+        av_log(avctx, AV_LOG_ERROR, "Global init for DCA encoder failed.\n");
         return AVERROR(ENOMEM);
+    }
 
     switch (layout.nb_channels) {
     case 1: /* mono */
@@ -239,7 +242,8 @@ static int encode_init(AVCodecContext *avctx)
         c->channel_config = 9;
         break;
     default:
-        av_assert1(!"impossible channel layout");
+        av_log(avctx, AV_LOG_ERROR, "Impossible channel layout with %d channels for DCA encoder.\n", layout.nb_channels);
+        return AVERROR(EAFNOSUPPORT);
     }
 
     if (c->lfe_channel) {
@@ -268,7 +272,10 @@ static int encode_init(AVCodecContext *avctx)
             break;
     }
     if (i == 9)
+    {
+        av_log(avctx, AV_LOG_ERROR, "Invalid sample rate %d for DCA encoder.\n", avctx->sample_rate);
         return AVERROR(EINVAL);
+    }
     c->samplerate_index = i;
 
     if (avctx->bit_rate < 32000 || avctx->bit_rate > 3840000) {
@@ -280,15 +287,28 @@ static int encode_init(AVCodecContext *avctx)
     c->bitrate_index = i;
     c->frame_bits = FFALIGN((avctx->bit_rate * 512 + avctx->sample_rate - 1) / avctx->sample_rate, 32);
     min_frame_bits = 132 + (493 + 28 * 32) * c->fullband_channels + c->lfe_channel * 72;
-    if (c->frame_bits < min_frame_bits || c->frame_bits > (DCA_MAX_FRAME_SIZE << 3))
+    if(c->frame_bits < min_frame_bits)
+    {        
+        float percentBitrate = (float)(min_frame_bits - c->frame_bits) / min_frame_bits;
+        float targetBitrate = (avctx->bit_rate * targetBitrate) + avctx->bit_rate;
+        av_log(avctx, AV_LOG_ERROR, "Invalid combined bitrate for DCA encoder, set the bitrate to about %f.\n", percentBitrate);
         return AVERROR(EINVAL);
+    }
+    if(c->frame_bits > (DCA_MAX_FRAME_SIZE << 3))
+    {
+        av_log(avctx, AV_LOG_ERROR, "Invalid combined bitrate and sample rate for DCA encoder.\n");
+        return AVERROR(EINVAL);
+    }
 
     c->frame_size = (c->frame_bits + 7) / 8;
 
     avctx->frame_size = 32 * SUBBAND_SAMPLES;
 
     if ((ret = av_tx_init(&c->mdct, &c->mdct_fn, AV_TX_INT32_MDCT, 0, 256, &scale, 0)) < 0)
+    {
+        av_log(avctx, AV_LOG_ERROR, "Init failed (%d) for DCA encoder.\n", ret);
         return ret;
+    }
 
     /* Init all tables */
     c->cos_table[0] = 0x7fffffff;
