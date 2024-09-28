@@ -602,8 +602,8 @@ static void dump_stream_format(const AVFormatContext *ic, int i,
     const FFStream *const sti = cffstream(st);
     const AVDictionaryEntry *lang = av_dict_get(st->metadata, "language", NULL, 0);
     const char *separator = ic->dump_separator;
-    const char *group_indent = group_index >= 0 ? "    " : "";
-    const char *extra_indent = group_index >= 0 ? "        " : "      ";
+    const char *group_indent = group_index >= 0 ? "  " : "";
+    const char *extra_indent = group_index >= 0 ? "      " : "    ";
     AVCodecContext *avctx;
     int ret;
 
@@ -782,10 +782,17 @@ static void dump_stream_group(const AVFormatContext *ic, uint8_t *printed,
         dump_disposition(stg->disposition, AV_LOG_INFO);
         av_log(NULL, AV_LOG_INFO, "\n");
         dump_metadata(NULL, stg->metadata, "    ", AV_LOG_INFO);
-        for (int i = 0; i < stg->nb_streams; i++) {
-            const AVStream *st = stg->streams[i];
+        for (int i = 0; i < tile_grid->nb_tiles; i++) {
+            const AVStream *st = stg->streams[tile_grid->offsets[i].idx];
             dump_stream_format(ic, st->index, i, index, is_output, AV_LOG_VERBOSE);
             printed[st->index] = 1;
+        }
+        for (int i = 0; i < stg->nb_streams; i++) {
+            const AVStream *st = stg->streams[i];
+            if (!printed[st->index]) {
+                dump_stream_format(ic, st->index, i, index, is_output, AV_LOG_INFO);
+                printed[st->index] = 1;
+            }
         }
         break;
     }
