@@ -64,7 +64,7 @@
 
 #define RETCODE_USE_CASCADE -12345
 
-struct SwsContext;
+typedef struct SwsContext SwsContext;
 
 typedef enum SwsDither {
     SWS_DITHER_NONE = 0,
@@ -73,7 +73,7 @@ typedef enum SwsDither {
     SWS_DITHER_ED,
     SWS_DITHER_A_DITHER,
     SWS_DITHER_X_DITHER,
-    NB_SWS_DITHER,
+    SWS_DITHER_NB,
 } SwsDither;
 
 typedef enum SwsAlphaBlend {
@@ -96,9 +96,9 @@ typedef struct RangeList {
 
 int ff_range_add(RangeList *r, unsigned int start, unsigned int len);
 
-typedef int (*SwsFunc)(struct SwsContext *context, const uint8_t *src[],
-                       int srcStride[], int srcSliceY, int srcSliceH,
-                       uint8_t *dst[], int dstStride[]);
+typedef int (*SwsFunc)(SwsContext *c, const uint8_t *const src[],
+                       const int srcStride[], int srcSliceY, int srcSliceH,
+                       uint8_t *const dst[], const int dstStride[]);
 
 /**
  * Write one line of horizontally scaled data to planar output
@@ -292,11 +292,36 @@ typedef void (*yuv2anyX_fn)(struct SwsContext *c, const int16_t *lumFilter,
                             const int16_t **alpSrc, uint8_t **dest,
                             int dstW, int y);
 
+/**
+ * Unscaled conversion of luma/alpha plane to YV12 for horizontal scaler.
+ */
+typedef void (*planar1_YV12_fn)(uint8_t *dst, const uint8_t *src, const uint8_t *src2,
+                                const uint8_t *src3, int width, uint32_t *pal,
+                                void *opaque);
+
+/**
+ * Unscaled conversion of chroma plane to YV12 for horizontal scaler.
+ */
+typedef void (*planar2_YV12_fn)(uint8_t *dst, uint8_t *dst2, const uint8_t *src,
+                                const uint8_t *src2, const uint8_t *src3,
+                                int width, uint32_t *pal, void *opaque);
+
+/**
+ * Unscaled conversion of arbitrary planar data (e.g. RGBA) to YV12, through
+ * conversion using the given color matrix.
+ */
+typedef void (*planarX_YV12_fn)(uint8_t *dst, const uint8_t *src[4], int width,
+                                int32_t *rgb2yuv, void *opaque);
+
+typedef void (*planarX2_YV12_fn)(uint8_t *dst, uint8_t *dst2,
+                                 const uint8_t *src[4], int width,
+                                 int32_t *rgb2yuv, void *opaque);
+
 struct SwsSlice;
 struct SwsFilterDescriptor;
 
 /* This struct should be aligned on at least a 32-byte boundary. */
-typedef struct SwsContext {
+struct SwsContext {
     /**
      * info on struct for av_log
      */
@@ -351,10 +376,8 @@ typedef struct SwsContext {
      * downscaling factor that needs to be supported in one scaler.
      */
     struct SwsContext *cascaded_context[3];
-    int cascaded_tmpStride[4];
-    uint8_t *cascaded_tmp[4];
-    int cascaded1_tmpStride[4];
-    uint8_t *cascaded1_tmp[4];
+    int cascaded_tmpStride[2][4];
+    uint8_t *cascaded_tmp[2][4];
     int cascaded_mainindex;
 
     double gamma_value;
@@ -563,28 +586,18 @@ typedef struct SwsContext {
     /// Opaque data pointer passed to all input functions.
     void *input_opaque;
 
-    /// Unscaled conversion of luma plane to YV12 for horizontal scaler.
-    void (*lumToYV12)(uint8_t *dst, const uint8_t *src, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal, void *opq);
-    /// Unscaled conversion of alpha plane to YV12 for horizontal scaler.
-    void (*alpToYV12)(uint8_t *dst, const uint8_t *src, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal, void *opq);
-    /// Unscaled conversion of chroma planes to YV12 for horizontal scaler.
-    void (*chrToYV12)(uint8_t *dstU, uint8_t *dstV,
-                      const uint8_t *src1, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal, void *opq);
+    planar1_YV12_fn lumToYV12;
+    planar1_YV12_fn alpToYV12;
+    planar2_YV12_fn chrToYV12;
 
     /**
      * Functions to read planar input, such as planar RGB, and convert
      * internally to Y/UV/A.
      */
     /** @{ */
-    void (*readLumPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv,
-                          void *opq);
-    void (*readChrPlanar)(uint8_t *dstU, uint8_t *dstV, const uint8_t *src[4],
-                          int width, int32_t *rgb2yuv, void *opq);
-    void (*readAlpPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv,
-                          void *opq);
+    planarX_YV12_fn  readLumPlanar;
+    planarX_YV12_fn  readAlpPlanar;
+    planarX2_YV12_fn readChrPlanar;
     /** @} */
 
     /**
@@ -682,7 +695,7 @@ typedef struct SwsContext {
     atomic_int   data_unaligned_warned;
 
     Half2FloatTables *h2f_tables;
-} SwsContext;
+};
 //FIXME check init (where 0)
 
 SwsFunc ff_yuv2rgb_get_func_ptr(SwsContext *c);
@@ -693,6 +706,8 @@ void ff_yuv2rgb_init_tables_ppc(SwsContext *c, const int inv_table[4],
                                 int brightness, int contrast, int saturation);
 
 void ff_updateMMXDitherTables(SwsContext *c, int dstY);
+
+void ff_update_palette(SwsContext *c, const uint32_t *pal);
 
 av_cold void ff_sws_init_range_convert(SwsContext *c);
 av_cold void ff_sws_init_range_convert_aarch64(SwsContext *c);
@@ -973,7 +988,13 @@ void ff_get_unscaled_swscale_aarch64(SwsContext *c);
 
 void ff_sws_init_scale(SwsContext *c);
 
-void ff_sws_init_input_funcs(SwsContext *c);
+void ff_sws_init_input_funcs(SwsContext *c,
+                             planar1_YV12_fn *lumToYV12,
+                             planar1_YV12_fn *alpToYV12,
+                             planar2_YV12_fn *chrToYV12,
+                             planarX_YV12_fn *readLumPlanar,
+                             planarX_YV12_fn *readAlpPlanar,
+                             planarX2_YV12_fn *readChrPlanar);
 void ff_sws_init_output_funcs(SwsContext *c,
                               yuv2planar1_fn *yuv2plane1,
                               yuv2planarX_fn *yuv2planeX,
@@ -1005,9 +1026,9 @@ void ff_hcscale_fast_mmxext(SwsContext *c, int16_t *dst1, int16_t *dst2,
                             int dstWidth, const uint8_t *src1,
                             const uint8_t *src2, int srcW, int xInc);
 
-int ff_sws_alphablendaway(SwsContext *c, const uint8_t *src[],
-                          int srcStride[], int srcSliceY, int srcSliceH,
-                          uint8_t *dst[], int dstStride[]);
+int ff_sws_alphablendaway(SwsContext *c, const uint8_t *const src[],
+                          const int srcStride[], int srcSliceY, int srcSliceH,
+                          uint8_t *const dst[], const int dstStride[]);
 
 void ff_copyPlane(const uint8_t *src, int srcStride,
                   int srcSliceY, int srcSliceH, int width,

@@ -564,7 +564,8 @@ static av_cold void sws_init_swscale(SwsContext *c)
                              &c->yuv2nv12cX, &c->yuv2packed1,
                              &c->yuv2packed2, &c->yuv2packedX, &c->yuv2anyX);
 
-    ff_sws_init_input_funcs(c);
+    ff_sws_init_input_funcs(c, &c->lumToYV12, &c->alpToYV12, &c->chrToYV12,
+                            &c->readLumPlanar, &c->readAlpPlanar, &c->readChrPlanar);
 
     if (c->srcBpc == 8) {
         if (c->dstBpc <= 14) {
@@ -748,7 +749,7 @@ static void rgb48Toxyz12(struct SwsContext *c, uint16_t *dst,
     }
 }
 
-static void update_palette(SwsContext *c, const uint32_t *pal)
+void ff_update_palette(SwsContext *c, const uint32_t *pal)
 {
     for (int i = 0; i < 256; i++) {
         int r, g, b, y, u, v, a = 0xff;
@@ -837,26 +838,26 @@ static int scale_gamma(SwsContext *c,
 {
     int ret = scale_internal(c->cascaded_context[0],
                              srcSlice, srcStride, srcSliceY, srcSliceH,
-                             c->cascaded_tmp, c->cascaded_tmpStride, 0, c->srcH);
+                             c->cascaded_tmp[0], c->cascaded_tmpStride[0], 0, c->srcH);
 
     if (ret < 0)
         return ret;
 
     if (c->cascaded_context[2])
-        ret = scale_internal(c->cascaded_context[1], (const uint8_t * const *)c->cascaded_tmp,
-                             c->cascaded_tmpStride, srcSliceY, srcSliceH,
-                             c->cascaded1_tmp, c->cascaded1_tmpStride, 0, c->dstH);
+        ret = scale_internal(c->cascaded_context[1], (const uint8_t * const *)c->cascaded_tmp[0],
+                             c->cascaded_tmpStride[0], srcSliceY, srcSliceH,
+                             c->cascaded_tmp[1], c->cascaded_tmpStride[1], 0, c->dstH);
     else
-        ret = scale_internal(c->cascaded_context[1], (const uint8_t * const *)c->cascaded_tmp,
-                             c->cascaded_tmpStride, srcSliceY, srcSliceH,
+        ret = scale_internal(c->cascaded_context[1], (const uint8_t * const *)c->cascaded_tmp[0],
+                             c->cascaded_tmpStride[0], srcSliceY, srcSliceH,
                              dstSlice, dstStride, dstSliceY, dstSliceH);
 
     if (ret < 0)
         return ret;
 
     if (c->cascaded_context[2]) {
-        ret = scale_internal(c->cascaded_context[2], (const uint8_t * const *)c->cascaded1_tmp,
-                             c->cascaded1_tmpStride, c->cascaded_context[1]->dstY - ret,
+        ret = scale_internal(c->cascaded_context[2], (const uint8_t * const *)c->cascaded_tmp[1],
+                             c->cascaded_tmpStride[1], c->cascaded_context[1]->dstY - ret,
                              c->cascaded_context[1]->dstY,
                              dstSlice, dstStride, dstSliceY, dstSliceH);
     }
@@ -871,12 +872,12 @@ static int scale_cascaded(SwsContext *c,
 {
     int ret = scale_internal(c->cascaded_context[0],
                              srcSlice, srcStride, srcSliceY, srcSliceH,
-                             c->cascaded_tmp, c->cascaded_tmpStride,
+                             c->cascaded_tmp[0], c->cascaded_tmpStride[0],
                              0, c->cascaded_context[0]->dstH);
     if (ret < 0)
         return ret;
     ret = scale_internal(c->cascaded_context[1],
-                         (const uint8_t * const * )c->cascaded_tmp, c->cascaded_tmpStride,
+                         (const uint8_t * const * )c->cascaded_tmp[0], c->cascaded_tmpStride[0],
                          0, c->cascaded_context[0]->dstH,
                          dstSlice, dstStride, dstSliceY, dstSliceH);
     return ret;
@@ -946,7 +947,7 @@ static int scale_internal(SwsContext *c,
             memset(c->dither_error[i], 0, sizeof(c->dither_error[0][0]) * (c->dstW+2));
 
     if (usePal(c->srcFormat))
-        update_palette(c, (const uint32_t *)srcSlice[1]);
+        ff_update_palette(c, (const uint32_t *)srcSlice[1]);
 
     memcpy(src2,       srcSlice,  sizeof(src2));
     memcpy(dst2,       dstSlice,  sizeof(dst2));
