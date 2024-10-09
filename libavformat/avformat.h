@@ -3087,6 +3087,11 @@ int avformat_match_stream_specifier(AVFormatContext *s, AVStream *st,
 
 int avformat_queue_attached_pictures(AVFormatContext *s);
 
+int avformat_init_context_ff(void *,unsigned char* buffer, int buffer_size, int write_flag, void* opaque, 
+    int (*read_packet)(void* opaque, uint8_t* buf, int buf_size),
+    int (*write_packet)(void* opaque, const uint8_t* buf, int buf_size),
+    int64_t(*seek)(void* opaque, int64_t offset, int whence));
+
 #if FF_API_INTERNAL_TIMING
 enum AVTimebaseSource {
     AVFMT_TBCF_AUTO = -1,

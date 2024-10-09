@@ -222,6 +222,40 @@ static int decode_rle(AVCodecContext *avctx, AVSubtitleRect *rect,
 }
 
 /**
+ *  Parse the picture segment packet.
+*   Sometimes needed for cropping (clash of the titans BR)
+ */
+static int parse_window_segment(AVCodecContext* avctx,
+    const uint8_t* buf, int buf_size)
+{
+int x, y, w, h, id, wndcount, i;
+
+    /*
+     * Window Segment Structure 
+     *     1 byte: nr of windows,
+     * then per window
+     *     1 byte: window id,
+     *     2 bytes: X position of subtitle,
+     *     2 bytes: Y position of subtitle,
+     *     2 bytes: Width of subtitle,
+     *     2 bytes: Height of subtitle.
+     */
+    wndcount = bytestream_get_byte(&buf);
+    for (i = 0; i < wndcount; i++)
+    {
+        id = bytestream_get_byte(&buf);
+
+        x = bytestream_get_be16(&buf);
+        y = bytestream_get_be16(&buf);
+        w = bytestream_get_be16(&buf);
+        h = bytestream_get_be16(&buf);
+    }
+
+    //  done
+    return 0;
+}
+
+/**
  * Parse the picture segment packet.
  *
  * The picture segment contains details on the sequence id,
@@ -517,6 +551,7 @@ static int display_end_segment(AVCodecContext *avctx, AVSubtitle *sub,
     ctx->presentation.pts = AV_NOPTS_VALUE;
     sub->start_display_time = 0;
     sub->format = 0;
+
     /* There is no explicit end time for PGS subtitles.The end time
     *  is defined by the start of the next sub which may contain no
     *  objects (i.e. clears the previous sub) 
@@ -656,14 +691,7 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
             ret = parse_presentation_segment(avctx, buf, segment_length, sub->pts);
             break;
         case WINDOW_SEGMENT:
-            /*
-             * Window Segment Structure (No new information provided):
-             *     2 bytes: Unknown,
-             *     2 bytes: X position of subtitle,
-             *     2 bytes: Y position of subtitle,
-             *     2 bytes: Width of subtitle,
-             *     2 bytes: Height of subtitle.
-             */
+            ret = parse_window_segment(avctx, buf, segment_length);
             break;
         case DISPLAY_SEGMENT:
             if (*got_sub_ptr) {

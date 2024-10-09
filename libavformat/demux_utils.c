@@ -24,6 +24,7 @@
 #include "libavutil/avassert.h"
 #include "libavcodec/bytestream.h"
 #include "libavcodec/packet_internal.h"
+#include "avio_internal.h"
 #include "avformat.h"
 #include "avio_internal.h"
 #include "demux.h"
@@ -88,6 +89,15 @@ void av_format_inject_global_side_data(AVFormatContext *s)
         AVStream *st = s->streams[i];
         ffstream(st)->inject_global_side_data = 1;
     }
+}
+
+int avformat_init_context_ff(void* ff, unsigned char* buffer, int buffer_size, int write_flag, void* opaque,
+    int (*read_packet)(void* opaque, uint8_t* buf, int buf_size),
+    int (*write_packet)(void* opaque, const uint8_t* buf, int buf_size),
+    int64_t(*seek)(void* opaque, int64_t offset, int whence))
+{
+    ffio_init_context((FFIOContext *)ff, buffer, buffer_size, write_flag, opaque, read_packet, write_packet, seek);
+    return 0;
 }
 
 int avformat_queue_attached_pictures(AVFormatContext *s)

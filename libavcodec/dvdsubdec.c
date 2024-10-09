@@ -408,14 +408,15 @@ static int decode_dvd_subtitles(DVDSubContext *ctx, AVSubtitle *sub_header,
                         index[i + 256] = alpha[i];
                     }
                 } else {
-                    sub_header->rects[0]->nb_colors = 4;
-                    guess_palette(ctx, (uint32_t*)sub_header->rects[0]->data[1],
-                                  0xffffff);
                     /* copy index and alpha */
                     for (int i = 0; i < 4; i++) {
                         index[i] = colormap[i];
                         index[i + 4] = alpha[i];
                     }
+
+                    sub_header->rects[0]->nb_colors = 4;
+                    guess_palette(ctx, (uint32_t*)sub_header->rects[0]->data[1],
+                                  0xffffff);
                 }
                 sub_header->rects[0]->x = x1;
                 sub_header->rects[0]->y = y1;
