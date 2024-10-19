@@ -26,6 +26,7 @@
 #include "libavcodec/packet_internal.h"
 #include "avio_internal.h"
 #include "avformat.h"
+#include "avformat_internal.h"
 #include "avio_internal.h"
 #include "demux.h"
 #include "internal.h"
@@ -43,7 +44,7 @@ void avpriv_stream_set_need_parsing(AVStream *st, enum AVStreamParseType type)
 AVChapter *avpriv_new_chapter(AVFormatContext *s, int64_t id, AVRational time_base,
                               int64_t start, int64_t end, const char *title)
 {
-    FFFormatContext *const si = ffformatcontext(s);
+    FormatContextInternal *const fci = ff_fc_internal(s);
     AVChapter *chapter = NULL;
     int ret;
 
@@ -53,13 +54,13 @@ AVChapter *avpriv_new_chapter(AVFormatContext *s, int64_t id, AVRational time_ba
     }
 
     if (!s->nb_chapters) {
-        si->chapter_ids_monotonic = 1;
-    } else if (!si->chapter_ids_monotonic || s->chapters[s->nb_chapters-1]->id >= id) {
+        fci->chapter_ids_monotonic = 1;
+    } else if (!fci->chapter_ids_monotonic || s->chapters[s->nb_chapters-1]->id >= id) {
         for (unsigned i = 0; i < s->nb_chapters; i++)
             if (s->chapters[i]->id == id)
                 chapter = s->chapters[i];
         if (!chapter)
-            si->chapter_ids_monotonic = 0;
+            fci->chapter_ids_monotonic = 0;
     }
 
     if (!chapter) {
@@ -81,6 +82,7 @@ AVChapter *avpriv_new_chapter(AVFormatContext *s, int64_t id, AVRational time_ba
     return chapter;
 }
 
+#if FF_API_AVSTREAM_SIDE_DATA
 void av_format_inject_global_side_data(AVFormatContext *s)
 {
     FFFormatContext *const si = ffformatcontext(s);
@@ -90,6 +92,7 @@ void av_format_inject_global_side_data(AVFormatContext *s)
         ffstream(st)->inject_global_side_data = 1;
     }
 }
+#endif
 
 int avformat_init_context_ff(void* ff, unsigned char* buffer, int buffer_size, int write_flag, void* opaque,
     int (*read_packet)(void* opaque, uint8_t* buf, int buf_size),
@@ -102,7 +105,7 @@ int avformat_init_context_ff(void* ff, unsigned char* buffer, int buffer_size, i
 
 int avformat_queue_attached_pictures(AVFormatContext *s)
 {
-    FFFormatContext *const si = ffformatcontext(s);
+    FormatContextInternal *const fci = ff_fc_internal(s);
     int ret;
     for (unsigned i = 0; i < s->nb_streams; i++)
         if (s->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC &&
@@ -114,7 +117,7 @@ int avformat_queue_attached_pictures(AVFormatContext *s)
                 continue;
             }
 
-            ret = avpriv_packet_list_put(&si->raw_packet_buffer,
+            ret = avpriv_packet_list_put(&fci->raw_packet_buffer,
                                          &s->streams[i]->attached_pic,
                                          av_packet_ref, 0);
             if (ret < 0)
