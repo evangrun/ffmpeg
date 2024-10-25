@@ -601,6 +601,7 @@ static void yvy2ToUV_c(uint8_t *dstU, uint8_t *dstV, const uint8_t *unused0, con
 
 y21xle_wrapper(10, 6)
 y21xle_wrapper(12, 4)
+y21xle_wrapper(16, 0)
 
 static void bswap16Y_c(uint8_t *_dst, const uint8_t *_src, const uint8_t *unused1, const uint8_t *unused2, int width,
                        uint32_t *unused, void *opq)
@@ -1538,7 +1539,7 @@ static void rgbf16##endian_name##ToY_c(uint8_t *_dst, const uint8_t *_src, const
 rgbaf16_funcs_endian(le, 0)
 rgbaf16_funcs_endian(be, 1)
 
-av_cold void ff_sws_init_input_funcs(SwsContext *c,
+av_cold void ff_sws_init_input_funcs(SwsInternal *c,
                                      planar1_YV12_fn *lumToYV12,
                                      planar1_YV12_fn *alpToYV12,
                                      planar2_YV12_fn *chrToYV12,
@@ -1756,6 +1757,9 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c,
         break;
     case AV_PIX_FMT_Y212LE:
         *chrToYV12 = y212le_UV_c;
+        break;
+    case AV_PIX_FMT_Y216LE:
+        *chrToYV12 = y216le_UV_c;
         break;
     case AV_PIX_FMT_RGBF32LE:
         *chrToYV12 = rgbf32le_to_uv_c;
@@ -2286,6 +2290,9 @@ av_cold void ff_sws_init_input_funcs(SwsContext *c,
         break;
     case AV_PIX_FMT_Y212LE:
         *lumToYV12 = y212le_Y_c;
+        break;
+    case AV_PIX_FMT_Y216LE:
+        *lumToYV12 = y216le_Y_c;
         break;
     case AV_PIX_FMT_X2RGB10LE:
         *lumToYV12 = rgb30leToY_c;
