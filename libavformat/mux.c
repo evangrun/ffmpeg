@@ -1135,9 +1135,10 @@ static int check_bitstream(AVFormatContext *s, FFStream *sti, AVPacket *pkt)
 static int interleaved_write_packet(AVFormatContext *s, AVPacket *pkt,
                                     int flush, int has_packet)
 {
-    FFFormatContext *const si = ffformatcontext(s);
-    for (;; ) {        
-        int ret = si->interleave_packet ? si->interleave_packet(s, pkt, flush, has_packet) : -1;
+    FormatContextInternal* const fci = ff_fc_internal(s);
+
+    for (;; ) {
+        int ret = fci->interleave_packet(s, pkt, flush, has_packet);
         if (ret <= 0)
             return ret;
 
