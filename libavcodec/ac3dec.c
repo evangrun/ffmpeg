@@ -477,11 +477,9 @@ static int decode_exponents(AC3DecodeContext *s,
     prevexp = absexp;
     for (i = 0, j = 0; i < ngrps * 3; i++) {
         prevexp += dexp[i] - 2;
-        prevexp = abs(prevexp);
         if (prevexp > 24U) {
-            prevexp = 24U;
-//            av_log(s->avctx, AV_LOG_ERROR, "exponent %d is out-of-range\n", prevexp);
-//            return AVERROR_INVALIDDATA;
+            av_log(s->avctx, AV_LOG_WARNING, "exponent %d is out-of-range\n", prevexp);
+            return AVERROR_INVALIDDATA;
         }
         switch (group_size) {
         case 4: dexps[j++] = prevexp;
@@ -1657,7 +1655,7 @@ dependent_frame:
     }
     for (blk = 0; blk < s->num_blocks; blk++) {
         if (!err && decode_audio_block(s, blk, offset)) {
-            av_log(avctx, AV_LOG_ERROR, "error decoding the audio block\n");
+//            av_log(avctx, AV_LOG_ERROR, "error decoding the audio block\n");
             err = 1;
         }
         if (err)
