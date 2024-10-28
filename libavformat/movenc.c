@@ -7085,6 +7085,8 @@ static int mov_write_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     trk = s->streams[pkt->stream_index]->priv_data;
+    if(NULL == trk)
+        return -1;
 
 #if CONFIG_IAMFENC
     if (trk->iamf) {
@@ -8349,6 +8351,8 @@ static int mov_write_trailer(AVFormatContext *s)
      */
     for (i = 0; i < mov->nb_tracks; i++) {
         MOVTrack *trk = &mov->tracks[i];
+        if(NULL == trk)
+            continue;
         if (trk->par->codec_id == AV_CODEC_ID_MOV_TEXT &&
             !trk->last_sample_is_subtitle_end) {
             mov_write_subtitle_end_packet(s, i, trk->track_duration);

@@ -3079,6 +3079,10 @@ static int mkv_write_packet(AVFormatContext *s, const AVPacket *pkt)
     if (ret < 0)
         return ret;
 
+    //  erik
+    if(NULL == mkv->tracks)
+        return -1;
+
     if (mkv->cluster_pos != -1) {
         if (mkv->tracks[pkt->stream_index].write_dts)
             cluster_time = pkt->dts - mkv->cluster_pts;

@@ -552,6 +552,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
     if (pkt->pts == AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && delay == 0)
         pkt->pts = pkt->dts;
 
+/*
     //XXX/FIXME this is a temporary hack until all encoders output pts
     if ((pkt->pts == 0 || pkt->pts == AV_NOPTS_VALUE) && pkt->dts == AV_NOPTS_VALUE && !delay) {
         static int warned;
@@ -563,7 +564,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
 //        pkt->pts= st->cur_dts;
             pkt->pts = sti->priv_pts.val;
     }
-
+*/
     //calculate dts from pts
     if (pkt->pts != AV_NOPTS_VALUE && pkt->dts == AV_NOPTS_VALUE && delay <= MAX_REORDER_DELAY) {
         sti->pts_buffer[0] = pkt->pts;
@@ -597,25 +598,27 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         av_log(s, AV_LOG_DEBUG, "av_write_frame: pts2:%s dts2:%s\n",
             av_ts2str(pkt->pts), av_ts2str(pkt->dts));
 
+    return 0;
+
     sti->cur_dts      = pkt->dts;
     sti->priv_pts.val = pkt->dts;
 
     /* update pts */
     switch (st->codecpar->codec_type) {
-    case AVMEDIA_TYPE_AUDIO:
-        frame_size = (pkt->flags & AV_PKT_FLAG_UNCODED_FRAME) ?
+        case AVMEDIA_TYPE_AUDIO:
+            frame_size = (pkt->flags & AV_PKT_FLAG_UNCODED_FRAME) ?
                      (*(AVFrame **)pkt->data)->nb_samples :
                      av_get_audio_frame_duration2(st->codecpar, pkt->size);
 
         /* HACK/FIXME, we skip the initial 0 size packets as they are most
          * likely equal to the encoder delay, but it would be better if we
          * had the real timestamps from the encoder */
-        if (frame_size >= 0 && (pkt->size || sti->priv_pts.num != sti->priv_pts.den >> 1 || sti->priv_pts.val)) {
+        if (frame_size >= 0 && (pkt->size || sti->priv_pts.num != sti->priv_pts.den >> 1 || sti->priv_pts.val > 0)) {
             frac_add(&sti->priv_pts, (int64_t)st->time_base.den * frame_size);
         }
         break;
-    case AVMEDIA_TYPE_VIDEO:
-        frac_add(&sti->priv_pts, (int64_t)st->time_base.den * st->time_base.num);
+        case AVMEDIA_TYPE_VIDEO:
+            frac_add(&sti->priv_pts, (int64_t)st->time_base.den * st->time_base.num);
         break;
     }
     return 0;
@@ -1300,6 +1303,10 @@ int av_write_trailer(AVFormatContext *s)
     FFFormatContext *const si = ffformatcontext(s);
     AVPacket *const pkt = si->parse_pkt;
     int ret1, ret = 0;
+
+    //  no streams. dont write
+    if(0 == s->nb_streams)
+        return 0;
 
     for (unsigned i = 0; i < s->nb_streams; i++) {
         AVStream *const st  = s->streams[i];

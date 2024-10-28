@@ -464,8 +464,9 @@ static int decode_exponents(AC3DecodeContext *s,
     for (grp = 0, i = 0; grp < ngrps; grp++) {
         expacc = get_bits(gbc, 7);
         if (expacc >= 125) {
-            av_log(s->avctx, AV_LOG_ERROR, "expacc %d is out-of-range\n", expacc);
-            return AVERROR_INVALIDDATA;
+            expacc = 124;
+//            av_log(s->avctx, AV_LOG_ERROR, "expacc %d is out-of-range\n", expacc);
+//            return AVERROR_INVALIDDATA;
         }
         dexp[i++] = ungroup_3_in_7_bits_tab[expacc][0];
         dexp[i++] = ungroup_3_in_7_bits_tab[expacc][1];
@@ -476,9 +477,11 @@ static int decode_exponents(AC3DecodeContext *s,
     prevexp = absexp;
     for (i = 0, j = 0; i < ngrps * 3; i++) {
         prevexp += dexp[i] - 2;
+        prevexp = abs(prevexp);
         if (prevexp > 24U) {
-            av_log(s->avctx, AV_LOG_ERROR, "exponent %d is out-of-range\n", prevexp);
-            return AVERROR_INVALIDDATA;
+            prevexp = 24U;
+//            av_log(s->avctx, AV_LOG_ERROR, "exponent %d is out-of-range\n", prevexp);
+//            return AVERROR_INVALIDDATA;
         }
         switch (group_size) {
         case 4: dexps[j++] = prevexp;
@@ -1019,9 +1022,14 @@ static inline int coupling_strategy(AC3DecodeContext *s, int blk,
         cpl_end_subband = s->spx_in_use ? (s->spx_src_start_freq - 37) / 12 :
                                           get_bits(bc, 4) + 3;
         if (cpl_start_subband >= cpl_end_subband) {
-            av_log(s->avctx, AV_LOG_ERROR, "invalid coupling range (%d >= %d)\n",
-                   cpl_start_subband, cpl_end_subband);
-            return AVERROR_INVALIDDATA;
+            if(cpl_end_subband > 0) {
+                cpl_start_subband = cpl_end_subband - 1;
+            }
+            else
+            {
+                av_log(s->avctx, AV_LOG_ERROR, "invalid coupling range (%d >= %d)\n", cpl_start_subband, cpl_end_subband);
+                return AVERROR_INVALIDDATA;
+            }
         }
         s->start_freq[CPL_CH] = cpl_start_subband * 12 + 37;
         s->end_freq[CPL_CH]   = cpl_end_subband   * 12 + 37;
