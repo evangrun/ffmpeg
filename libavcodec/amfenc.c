@@ -687,11 +687,21 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
         case AV_PIX_FMT_D3D11:
             {
                 static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
-                ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
-                int index = (intptr_t)frame->data[1]; // index is a slice in texture array is - set to tell AMF which slice to use
+                AVD3D11FrameDescriptor* descriptor;
+                ID3D11Texture2D* texture = NULL;
+                int index = 0;
+                //  get buffer reference
+                AVBufferRef* reference = (AVBufferRef*)frame->buf[0];
+                if (NULL == reference) {
+                    av_log(avctx, AV_LOG_ERROR, "Invalid frame data, no texture present in buf[0].\n");
+                    return -1;
+                }
+                descriptor = (AVD3D11FrameDescriptor*)(reference->data);
+                texture = descriptor->texture; // actual texture
+                index = (int)descriptor->index;
 
-                av_assert0(frame->hw_frames_ctx       && ctx->hw_frames_ctx &&
-                           frame->hw_frames_ctx->data == ctx->hw_frames_ctx->data);
+//                av_assert0(frame->hw_frames_ctx       && ctx->hw_frames_ctx 
+//                           frame->hw_frames_ctx->data == ctx->hw_frames_ctx->data);
 
                 texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
 
