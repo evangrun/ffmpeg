@@ -127,8 +127,9 @@ static void count_colors(AVCodecContext *avctx, unsigned hits[33],
     uint8_t *p = r->data[0];
 
     for (y = 0; y < r->h; y++) {
-        for (x = 0; x < r->w; x++)
+        for (x = 0; x < r->w; x++) {
             count[*(p++)]++;
+        }
         p += r->linesize[0] - r->w;
     }
     for (i = 0; i < 256; i++) {

@@ -302,7 +302,7 @@ static int parse_object_segment(AVCodecContext *avctx,
         0xC0: First and last in sequence (0x40 | 0x80)
     */
     if (sequence_desc & 0x80) {
-        /* First and last in sequence */
+        /* First and last in sequence, or first in sequence */
         if (buf_size <= 7) {
             av_log(avctx, AV_LOG_ERROR, "Input buffer does not contain enough data.\n");
             return AVERROR_INVALIDDATA;
@@ -316,8 +316,9 @@ static int parse_object_segment(AVCodecContext *avctx,
         rle_bitmap_len -= 4;
     }
     else
-    if (sequence_desc & 0x40) {  
-        /* Last in sequence, additional RLE data */
+//    if (sequence_desc & 0x40) 
+    {  
+        /* next in sequence, additional RLE data */
         if (buf_size > object->rle_remaining_len) {
             av_log(avctx, AV_LOG_ERROR, "Input buffer contains to much RLE data for bitmap.\n");
             return AVERROR_INVALIDDATA;
