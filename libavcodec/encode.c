@@ -631,7 +631,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
         AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
         if (frames_ctx->format != avctx->pix_fmt) {
             av_log(avctx, AV_LOG_ERROR,
-                   "Mismatching AVCodecContext.pix_fmt and AVHWFramesContext.format\n");
+                   "Mismatching AVCodecContext.pix_fmt (%s) "
+                   "and AVHWFramesContext.format (%s)\n",
+                   av_get_pix_fmt_name(avctx->pix_fmt),
+                   av_get_pix_fmt_name(frames_ctx->format));
             return AVERROR(EINVAL);
         }
         if (avctx->sw_pix_fmt != AV_PIX_FMT_NONE &&

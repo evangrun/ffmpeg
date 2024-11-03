@@ -2036,6 +2036,7 @@ static int submit_frame(QSVEncContext *q, const AVFrame *frame,
 {
     QSVFrame *qf;
     int ret;
+    int useffmpegpool = 1;
 
     ret = get_free_frame(q, &qf);
     if (ret < 0)
@@ -2046,16 +2047,28 @@ static int submit_frame(QSVEncContext *q, const AVFrame *frame,
         if (ret < 0)
             return ret;
 
-        qf->surface = *(mfxFrameSurface1*)qf->frame->data[3];
-
-        if (q->frames_ctx.mids) {
-            ret = ff_qsv_find_surface_idx(&q->frames_ctx, qf);
-            if (ret < 0)
-                return ret;
-
-            qf->surface.Data.MemId = &q->frames_ctx.mids[ret];
+        if (frame->hw_frames_ctx) {
+            AVHWFramesContext* frames_ctx = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+            AVQSVFramesContext* frames_hwctx = frames_ctx->hwctx;
+            useffmpegpool = (frames_hwctx->nb_surfaces > 0);
         }
-    } else {
+        if (useffmpegpool) 
+        {
+            if (q->frames_ctx.mids) {
+                ret = ff_qsv_find_surface_idx(&q->frames_ctx, qf);
+                if (ret < 0)
+                    return ret;
+
+                qf->surface.Data.MemId = &q->frames_ctx.mids[ret];
+            }
+        }
+        else 
+        {
+            qf->surface = *(mfxFrameSurface1*)qf->frame->data[3];
+        }
+    } 
+    else 
+    {
         /* make a copy if the input is not padded as libmfx requires */
         /* and to make allocation continious for data[0]/data[1] */
          if ((frame->height & (q->height_align - 1) || frame->linesize[0] & (q->width_align - 1)) ||
