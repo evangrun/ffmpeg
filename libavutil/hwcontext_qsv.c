@@ -2486,6 +2486,7 @@ static int qsv_device_derive(AVHWDeviceContext *ctx,
 {
     mfxIMPL impl;
     QSVDevicePriv *priv;
+    AVDictionaryEntry *entry = NULL;
 
     priv = av_mallocz(sizeof(*priv));
     if (!priv)
@@ -2494,7 +2495,12 @@ static int qsv_device_derive(AVHWDeviceContext *ctx,
     ctx->user_opaque = priv;
     ctx->free = qsv_device_free;
 
-    impl = choose_implementation("hw_any", child_device_ctx->type);
+    if((opts != NULL) && (entry = av_dict_get(opts, "adapter", NULL, 0))) {
+        impl = choose_implementation(entry->value, child_device_ctx->type);
+    }
+    else {
+        impl = choose_implementation("hw_any", child_device_ctx->type);
+    }
     return qsv_device_derive_from_child(ctx, impl,
                                         child_device_ctx, flags);
 }

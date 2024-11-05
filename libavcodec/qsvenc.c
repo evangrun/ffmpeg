@@ -2673,7 +2673,7 @@ int ff_qsv_encode(AVCodecContext *avctx, QSVEncContext *q,
         av_fifo_read(q->async_fifo, &qpkt, 1);
 
         do {
-            ret = MFXVideoCORE_SyncOperation(q->session, *qpkt.sync, 1000);
+            ret = MFXVideoCORE_SyncOperation(q->session, *qpkt.sync, 100);
         } while (ret == MFX_WRN_IN_EXECUTION);
 
         qpkt.pkt.dts  = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational){1, 90000}, avctx->time_base);

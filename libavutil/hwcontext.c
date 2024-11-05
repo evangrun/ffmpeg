@@ -704,8 +704,7 @@ int av_hwdevice_ctx_create_derived(AVBufferRef **dst_ref_ptr,
                                    enum AVHWDeviceType type,
                                    AVBufferRef *src_ref, int flags)
 {
-    return av_hwdevice_ctx_create_derived_opts(dst_ref_ptr, type, src_ref,
-                                               NULL, flags);
+    return av_hwdevice_ctx_create_derived_opts(dst_ref_ptr, type, src_ref, NULL, flags);
 }
 
 static void ff_hwframe_unmap(void *opaque, uint8_t *data)

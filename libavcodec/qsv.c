@@ -865,6 +865,7 @@ static mfxStatus qsv_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
         AVHWFramesContext *frames_ctx;
         AVQSVFramesContext *frames_hwctx;
 
+
         if (!ext_frames_hwctx->nb_surfaces)
             return MFX_ERR_UNSUPPORTED;
 

@@ -2158,11 +2158,12 @@ static int nvenc_find_free_reg_resource(AVCodecContext *avctx)
                             continue;
                         nv_status = p_nvenc->nvEncUnregisterResource(ctx->nvencoder, ctx->registered_frames[i].regptr);
                         if (nv_status != NV_ENC_SUCCESS)
-                            return nvenc_print_error(avctx, nv_status, "Failed unregistering unused input resource");
+                            continue;
+//                            return nvenc_print_error(avctx, nv_status, "Failed unregistering unused input resource");
                         ctx->registered_frames[i].ptr = NULL;
                         ctx->registered_frames[i].regptr = NULL;
                     }
-                    return i;
+                    return i; 
                 }
             }
         }
@@ -2921,20 +2922,26 @@ int ff_nvenc_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
     if (output_ready(avctx, avctx->internal->draining)) {
         av_fifo_read(ctx->output_surface_ready_queue, &tmp_out_surf, 1);
 
+        //  push context
         res = nvenc_push_context(avctx);
-        if (res < 0)
+        if (res < 0) {
             return res;
+        }
 
+        //  process output
         res = process_output_surface(avctx, pkt, tmp_out_surf);
 
+        //  pop context
         res2 = nvenc_pop_context(avctx);
-        if (res2 < 0)
+        if (res2 < 0) {
             return res2;
-
-        if (res)
-            return res;
+        }
 
         av_fifo_write(ctx->unused_surface_queue, &tmp_out_surf, 1);
+
+        //  error?
+        if (res)
+            return res;
     } else if (avctx->internal->draining) {
         return AVERROR_EOF;
     } else {
