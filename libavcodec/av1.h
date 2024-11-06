@@ -25,7 +25,7 @@
 #define AVCODEC_AV1_H
 
 // OBU types (section 6.2.2).
-typedef enum {
+enum AV1_OBU_Type {
     // 0 reserved.
     AV1_OBU_SEQUENCE_HEADER        = 1,
     AV1_OBU_TEMPORAL_DELIMITER     = 2,
@@ -37,7 +37,7 @@ typedef enum {
     AV1_OBU_TILE_LIST              = 8,
     // 9-14 reserved.
     AV1_OBU_PADDING                = 15,
-} AV1_OBU_Type;
+};
 
 // Metadata types (section 6.7.1).
 enum {

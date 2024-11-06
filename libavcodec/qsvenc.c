@@ -95,6 +95,8 @@ typedef struct QSVPacket {
     AVPacket        pkt;
     mfxSyncPoint   *sync;
     mfxBitstream   *bs;
+    int64_t         m_pts;
+    int64_t         m_dts;
 } QSVPacket;
 
 static const char *print_profile(enum AVCodecID codec_id, mfxU16 profile)
@@ -757,8 +759,7 @@ static int init_video_param_jpeg(AVCodecContext *avctx, QSVEncContext *q)
         q->param.mfx.FrameInfo.FrameRateExtN  = avctx->time_base.den;
         q->param.mfx.FrameInfo.FrameRateExtD  = avctx->time_base.num;
     }
-
-    q->param.mfx.Interleaved          = 1;
+    q->param.mfx.Interleaved = 0;
     q->param.mfx.Quality              = av_clip(avctx->global_quality, 1, 100);
     q->param.mfx.RestartInterval      = 0;
 
@@ -773,6 +774,7 @@ static int init_video_param_jpeg(AVCodecContext *avctx, QSVEncContext *q)
 
 static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
 {
+    //  see https://oneapi-spec.uxlfoundation.org/specifications/oneapi/v1.2-rev-1/elements/onevpl/source/api_ref/vpl_structs_cross_component#_CPPv410mfxInfoMFX
     enum AVPixelFormat sw_format = avctx->pix_fmt == AV_PIX_FMT_QSV ?
                                    avctx->sw_pix_fmt : avctx->pix_fmt;
     const AVPixFmtDescriptor *desc;
@@ -821,7 +823,10 @@ static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
     q->param.mfx.IdrInterval        = q->idr_interval;
     q->param.mfx.NumSlice           = avctx->slices;
     q->param.mfx.NumRefFrame        = FFMAX(0, avctx->refs);
-    q->param.mfx.EncodedOrder       = 0;
+    if (avctx->codec_id == AV_CODEC_ID_H265)
+        q->param.mfx.EncodedOrder = 1;
+    else
+        q->param.mfx.EncodedOrder = 0;
     q->param.mfx.BufferSizeInKB     = 0;
 
     desc = av_pix_fmt_desc_get(sw_format);
@@ -1875,6 +1880,8 @@ static void clear_unused_frames(QSVEncContext *q)
                 av_frame_unref(cur->frame);
             }
             cur->used = 0;
+            //  no need to loop everything every time, we found one
+            return;
         }
         cur = cur->next;
     }
@@ -2125,7 +2132,7 @@ static int submit_frame(QSVEncContext *q, const AVFrame *frame,
             return ret;
         }
     }
-    qf->surface.Data.TimeStamp = av_rescale_q(frame->pts, q->avctx->time_base, (AVRational){1, 90000});
+    qf->surface.Data.TimeStamp = av_rescale_q(frame->pts, q->avctx->time_base, (AVRational) { 1, 90000 });
 
     *new_frame = qf;
 
@@ -2498,6 +2505,15 @@ static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
             if ((frame->flags & AV_FRAME_FLAG_KEY) || q->forced_idr)
                 enc_ctrl->FrameType |= MFX_FRAMETYPE_IDR;
         }
+        else
+        if (frame->pict_type == AV_PICTURE_TYPE_P) {
+            enc_ctrl->FrameType = MFX_FRAMETYPE_P;
+        }
+        else
+        if((frame->pict_type == AV_PICTURE_TYPE_NONE) && (avctx->codec_id == AV_CODEC_ID_H264)) {
+            //  we need this, otherwise we get invalid video parameter
+            enc_ctrl->FrameType = MFX_FRAMETYPE_I;
+        }
     }
 
     ret = av_new_packet(&pkt.pkt, q->packet_size);
@@ -2511,6 +2527,15 @@ static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
         goto nomem;
     pkt.bs->Data      = pkt.pkt.data;
     pkt.bs->MaxLength = pkt.pkt.size;
+
+    if (frame) {
+        pkt.m_pts = frame->pts;
+        pkt.m_dts = frame->pkt_dts;
+    }
+    else {
+        pkt.m_pts = 0;
+        pkt.m_dts = 0;
+    }
 
     if (avctx->codec_id == AV_CODEC_ID_H264) {
         enc_info = av_mallocz(sizeof(*enc_info));
@@ -2663,8 +2688,8 @@ int ff_qsv_encode(AVCodecContext *avctx, QSVEncContext *q,
     if (ret < 0 && ret != AVERROR(EAGAIN))
         return ret;
 
-    if ((av_fifo_can_read(q->async_fifo) >= q->async_depth) ||
-        (!frame && av_fifo_can_read(q->async_fifo))) {
+    if ((av_fifo_can_read(q->async_fifo) >= q->async_depth) || (!frame && av_fifo_can_read(q->async_fifo))) 
+    {
         QSVPacket qpkt;
         mfxExtAVCEncodedFrameInfo *enc_info;
         mfxExtBuffer **enc_buf;
@@ -2673,35 +2698,50 @@ int ff_qsv_encode(AVCodecContext *avctx, QSVEncContext *q,
         av_fifo_read(q->async_fifo, &qpkt, 1);
 
         do {
-            ret = MFXVideoCORE_SyncOperation(q->session, *qpkt.sync, 100);
+            //  get sync from previous frame, if any
+            ret = MFXVideoCORE_SyncOperation(q->session, *qpkt.sync, 1000);
         } while (ret == MFX_WRN_IN_EXECUTION);
 
-        qpkt.pkt.dts  = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational){1, 90000}, avctx->time_base);
-        qpkt.pkt.pts  = av_rescale_q(qpkt.bs->TimeStamp,       (AVRational){1, 90000}, avctx->time_base);
+        qpkt.pkt.dts = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
+        qpkt.pkt.pts = av_rescale_q(qpkt.bs->TimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
         qpkt.pkt.size = qpkt.bs->DataLength;
+
+        //  @@@ just overwrite, we are in sync now
+        //  last frame timestamp!
+        if(qpkt.m_dts != 0) {
+            qpkt.pkt.dts = qpkt.m_dts;
+            qpkt.pkt.pts = qpkt.m_pts;
+        }
+        else {
+            qpkt.pkt.dts = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
+            qpkt.pkt.pts = av_rescale_q(qpkt.bs->TimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
+        }
 
         if (qpkt.bs->FrameType & MFX_FRAMETYPE_IDR || qpkt.bs->FrameType & MFX_FRAMETYPE_xIDR) {
             qpkt.pkt.flags |= AV_PKT_FLAG_KEY;
             pict_type = AV_PICTURE_TYPE_I;
-        } else if (qpkt.bs->FrameType & MFX_FRAMETYPE_I || qpkt.bs->FrameType & MFX_FRAMETYPE_xI) {
+        }
+        else if (qpkt.bs->FrameType & MFX_FRAMETYPE_I || qpkt.bs->FrameType & MFX_FRAMETYPE_xI) {
             if (avctx->codec_id == AV_CODEC_ID_VP9)
                 qpkt.pkt.flags |= AV_PKT_FLAG_KEY;
             pict_type = AV_PICTURE_TYPE_I;
-        } else if (qpkt.bs->FrameType & MFX_FRAMETYPE_P || qpkt.bs->FrameType & MFX_FRAMETYPE_xP)
+        }
+        else if (qpkt.bs->FrameType & MFX_FRAMETYPE_P || qpkt.bs->FrameType & MFX_FRAMETYPE_xP)
             pict_type = AV_PICTURE_TYPE_P;
         else if (qpkt.bs->FrameType & MFX_FRAMETYPE_B || qpkt.bs->FrameType & MFX_FRAMETYPE_xB)
             pict_type = AV_PICTURE_TYPE_B;
         else if (qpkt.bs->FrameType == MFX_FRAMETYPE_UNKNOWN && qpkt.bs->DataLength) {
             pict_type = AV_PICTURE_TYPE_NONE;
             av_log(avctx, AV_LOG_WARNING, "Unknown FrameType, set pict_type to AV_PICTURE_TYPE_NONE.\n");
-        } else {
+        }
+        else {
             av_log(avctx, AV_LOG_ERROR, "Invalid FrameType:%d.\n", qpkt.bs->FrameType);
             return AVERROR_INVALIDDATA;
         }
 
         if (avctx->codec_id == AV_CODEC_ID_H264) {
             enc_buf = qpkt.bs->ExtParam;
-            enc_info = (mfxExtAVCEncodedFrameInfo *)(*enc_buf);
+            enc_info = (mfxExtAVCEncodedFrameInfo*)(*enc_buf);
             ff_side_data_set_encoder_stats(&qpkt.pkt,
                 enc_info->QP * FF_QP2LAMBDA, NULL, 0, pict_type);
             av_freep(&enc_info);
