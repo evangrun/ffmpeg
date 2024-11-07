@@ -1130,15 +1130,22 @@ static int qsv_create_mfx_session_from_loader(void *ctx, mfxLoader loader, mfxSe
 
     while (1) {
         /* Enumerate all implementations */
-        mfxImplDescription *impl_desc;
+        mfxImplDescription *impl_desc = NULL;
 
         sts = MFXEnumImplementations(loader, impl_idx,
                                      MFX_IMPLCAPS_IMPLDESCSTRUCTURE,
                                      (mfxHDL *)&impl_desc);
         /* Failed to find an available implementation */
-        if (sts == MFX_ERR_NOT_FOUND)
+        if (sts == MFX_ERR_NOT_FOUND) {
+            if(impl_desc) {
+                MFXDispReleaseImplDescription(loader, impl_desc);
+            }
             break;
+        }
         else if (sts != MFX_ERR_NONE) {
+            if (impl_desc) {
+                MFXDispReleaseImplDescription(loader, impl_desc);
+            }
             impl_idx++;
             continue;
         }

@@ -95,8 +95,6 @@ typedef struct QSVPacket {
     AVPacket        pkt;
     mfxSyncPoint   *sync;
     mfxBitstream   *bs;
-    int64_t         m_pts;
-    int64_t         m_dts;
 } QSVPacket;
 
 static const char *print_profile(enum AVCodecID codec_id, mfxU16 profile)
@@ -823,10 +821,7 @@ static int init_video_param(AVCodecContext *avctx, QSVEncContext *q)
     q->param.mfx.IdrInterval        = q->idr_interval;
     q->param.mfx.NumSlice           = avctx->slices;
     q->param.mfx.NumRefFrame        = FFMAX(0, avctx->refs);
-    if (avctx->codec_id == AV_CODEC_ID_H265)
-        q->param.mfx.EncodedOrder = 1;
-    else
-        q->param.mfx.EncodedOrder = 0;
+    q->param.mfx.EncodedOrder       = 0;
     q->param.mfx.BufferSizeInKB     = 0;
 
     desc = av_pix_fmt_desc_get(sw_format);
@@ -2528,15 +2523,6 @@ static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
     pkt.bs->Data      = pkt.pkt.data;
     pkt.bs->MaxLength = pkt.pkt.size;
 
-    if (frame) {
-        pkt.m_pts = frame->pts;
-        pkt.m_dts = frame->pkt_dts;
-    }
-    else {
-        pkt.m_pts = 0;
-        pkt.m_dts = 0;
-    }
-
     if (avctx->codec_id == AV_CODEC_ID_H264) {
         enc_info = av_mallocz(sizeof(*enc_info));
         if (!enc_info)
@@ -2698,24 +2684,14 @@ int ff_qsv_encode(AVCodecContext *avctx, QSVEncContext *q,
         av_fifo_read(q->async_fifo, &qpkt, 1);
 
         do {
-            //  get sync from previous frame, if any
+            //  get sync from first frame
+            //  note that this can return completely different frame data then what it was given for the sync
             ret = MFXVideoCORE_SyncOperation(q->session, *qpkt.sync, 1000);
         } while (ret == MFX_WRN_IN_EXECUTION);
 
         qpkt.pkt.dts = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
         qpkt.pkt.pts = av_rescale_q(qpkt.bs->TimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
         qpkt.pkt.size = qpkt.bs->DataLength;
-
-        //  @@@ just overwrite, we are in sync now
-        //  last frame timestamp!
-        if(qpkt.m_dts != 0) {
-            qpkt.pkt.dts = qpkt.m_dts;
-            qpkt.pkt.pts = qpkt.m_pts;
-        }
-        else {
-            qpkt.pkt.dts = av_rescale_q(qpkt.bs->DecodeTimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
-            qpkt.pkt.pts = av_rescale_q(qpkt.bs->TimeStamp, (AVRational) { 1, 90000 }, avctx->time_base);
-        }
 
         if (qpkt.bs->FrameType & MFX_FRAMETYPE_IDR || qpkt.bs->FrameType & MFX_FRAMETYPE_xIDR) {
             qpkt.pkt.flags |= AV_PKT_FLAG_KEY;
