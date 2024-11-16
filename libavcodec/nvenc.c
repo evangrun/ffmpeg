@@ -1685,6 +1685,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #endif
 
     ctx->init_encode_params.enableEncodeAsync = 0;
+
+    //  send pictures in display order. encoder will decide picture type
     ctx->init_encode_params.enablePTD = 1;
 
 #ifdef NVENC_HAVE_NEW_PRESETS
