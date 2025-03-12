@@ -1311,8 +1311,7 @@ static int mf_init(AVCodecContext *avctx)
     };
 
 #define AFMTS \
-        .p.sample_fmts  = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,    \
-                                                         AV_SAMPLE_FMT_NONE },
+        CODEC_SAMPLEFMTS(AV_SAMPLE_FMT_S16),
 #define ACAPS \
         .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HYBRID |           \
                           AV_CODEC_CAP_DR1 | AV_CODEC_CAP_VARIABLE_FRAME_SIZE,
