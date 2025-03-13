@@ -133,7 +133,12 @@ typedef struct FFCodec {
     /**
      * Internal codec capabilities FF_CODEC_CAP_*.
      */
-    unsigned caps_internal:27;
+    unsigned caps_internal:26;
+
+    /**
+     * Is this a decoder?
+     */
+    unsigned is_decoder:1;
 
     /**
      * This field determines the video color ranges supported by an encoder.
@@ -276,6 +281,31 @@ typedef struct FFCodec {
                                 int *out_num_configs);
 } FFCodec;
 
+static av_always_inline const FFCodec *ffcodec(const AVCodec *codec)
+{
+    return (const FFCodec*)codec;
+}
+
+/**
+ * Internal version of av_codec_is_encoder(). Must not be called with
+ * a NULL AVCodec*.
+ */
+static inline int ff_codec_is_encoder(const AVCodec *avcodec)
+{
+    const FFCodec *const codec = ffcodec(avcodec);
+    return !codec->is_decoder;
+}
+
+/**
+ * Internal version of av_codec_is_decoder(). Must not be called with
+ * a NULL AVCodec*.
+ */
+static inline int ff_codec_is_decoder(const AVCodec *avcodec)
+{
+    const FFCodec *const codec = ffcodec(avcodec);
+    return codec->is_decoder;
+}
+
 /**
  * Default implementation for avcodec_get_supported_config(). Will return the
  * relevant fields from AVCodec if present, or NULL otherwise.
@@ -309,21 +339,27 @@ int ff_default_get_supported_config(const struct AVCodecContext *avctx,
 #endif
 
 #define FF_CODEC_DECODE_CB(func)                          \
+    .is_decoder        = 1,                               \
     .cb_type           = FF_CODEC_CB_TYPE_DECODE,         \
     .cb.decode         = (func)
 #define FF_CODEC_DECODE_SUB_CB(func)                      \
+    .is_decoder        = 1,                               \
     .cb_type           = FF_CODEC_CB_TYPE_DECODE_SUB,     \
     .cb.decode_sub     = (func)
 #define FF_CODEC_RECEIVE_FRAME_CB(func)                   \
+    .is_decoder        = 1,                               \
     .cb_type           = FF_CODEC_CB_TYPE_RECEIVE_FRAME,  \
     .cb.receive_frame  = (func)
 #define FF_CODEC_ENCODE_CB(func)                          \
+    .is_decoder        = 0,                               \
     .cb_type           = FF_CODEC_CB_TYPE_ENCODE,         \
     .cb.encode         = (func)
 #define FF_CODEC_ENCODE_SUB_CB(func)                      \
+    .is_decoder        = 0,                               \
     .cb_type           = FF_CODEC_CB_TYPE_ENCODE_SUB,     \
     .cb.encode_sub     = (func)
 #define FF_CODEC_RECEIVE_PACKET_CB(func)                  \
+    .is_decoder        = 0,                               \
     .cb_type           = FF_CODEC_CB_TYPE_RECEIVE_PACKET, \
     .cb.receive_packet = (func)
 
@@ -354,10 +390,5 @@ int ff_default_get_supported_config(const struct AVCodecContext *avctx,
     DISABLE_DEPRECATION_WARNINGS  \
     .p.field = (array)            \
     ENABLE_DEPRECATION_WARNINGS
-
-static av_always_inline const FFCodec *ffcodec(const AVCodec *codec)
-{
-    return (const FFCodec*)codec;
-}
 
 #endif /* AVCODEC_CODEC_INTERNAL_H */
