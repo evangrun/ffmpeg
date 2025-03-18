@@ -3195,6 +3195,8 @@ av1_videotoolbox_hwaccel_deps="videotoolbox"
 av1_videotoolbox_hwaccel_select="av1_decoder"
 av1_vulkan_hwaccel_deps="vulkan"
 av1_vulkan_hwaccel_select="av1_decoder"
+ffv1_vulkan_hwaccel_deps="vulkan spirv_compiler"
+ffv1_vulkan_hwaccel_select="ffv1_decoder"
 h263_vaapi_hwaccel_deps="vaapi"
 h263_vaapi_hwaccel_select="h263_decoder"
 h263_videotoolbox_hwaccel_deps="videotoolbox"
@@ -7500,6 +7502,10 @@ check_disable_warning -Wno-bool-operation
 check_disable_warning -Wno-char-subscripts
 check_disable_warning -Wno-implicit-const-int-float-conversion
 
+# Disable mixed decl and code warning for Objective-C
+test_objcflags $unknown_warning_flags '-Wdeclaration-after-statement' &&
+    add_objcflags '-Wno-declaration-after-statement'
+
 check_disable_warning_headers(){
     warning_flag=-W${1#-Wno-}
     test_cflags $warning_flag && add_cflags_headers $1
@@ -8141,7 +8147,7 @@ LN_S=$ln_s
 CPPFLAGS=$CPPFLAGS
 CFLAGS=$CFLAGS
 CXXFLAGS=$CXXFLAGS
-OBJCCFLAGS=$OBJCFLAGS
+OBJCFLAGS=$OBJCFLAGS
 ASFLAGS=$ASFLAGS
 NVCCFLAGS=$nvccflags
 AS_C=$AS_C

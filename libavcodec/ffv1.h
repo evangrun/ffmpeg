@@ -125,8 +125,10 @@ typedef struct FFV1Context {
     int64_t picture_number;
     int key_frame;
     ProgressFrame picture, last_picture;
+    void *hwaccel_picture_private, *hwaccel_last_picture_private;
     uint32_t crcref;
     enum AVPixelFormat pix_fmt;
+    enum AVPixelFormat configured_pix_fmt;
 
     const AVFrame *cur_enc_frame;
     int plane_count;
@@ -137,6 +139,7 @@ typedef struct FFV1Context {
     uint8_t (*initial_states[MAX_QUANT_TABLES])[32];
     int colorspace;
     int flt;
+    int remap_mode;
 
 
     int use32bit;
