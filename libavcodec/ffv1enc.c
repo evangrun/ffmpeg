@@ -31,6 +31,7 @@
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/qsort.h"
 
 #include "avcodec.h"
 #include "encode.h"
@@ -432,7 +433,7 @@ static void set_micro_version(FFV1Context *f)
         if (f->version == 3) {
             f->micro_version = 4;
         } else if (f->version == 4) {
-            f->micro_version = 5;
+            f->micro_version = 7;
         } else
             av_assert0(0);
 
@@ -576,6 +577,9 @@ int ff_ffv1_encode_determine_slices(AVCodecContext *avctx)
                 continue;
             if (maxw * maxh * (int64_t)(s->bits_per_raw_sample+1) * plane_count > 8<<24)
                 continue;
+            if (s->bits_per_raw_sample == 32)
+                if (maxw * maxh > 65536)
+                    continue;
             if (s->version < 4)
                 if (  ff_need_new_slices(avctx->width , s->num_h_slices, s->chroma_h_shift)
                     ||ff_need_new_slices(avctx->height, s->num_v_slices, s->chroma_v_shift))
@@ -917,6 +921,10 @@ av_cold int ff_ffv1_encode_setup_plane_info(AVCodecContext *avctx,
     case AV_PIX_FMT_GBRAPF16:
         if (!avctx->bits_per_raw_sample && !s->bits_per_raw_sample)
             s->bits_per_raw_sample = 16;
+    case AV_PIX_FMT_GBRPF32:
+    case AV_PIX_FMT_GBRAPF32:
+        if (!avctx->bits_per_raw_sample && !s->bits_per_raw_sample)
+            s->bits_per_raw_sample = 32;
         else if (!s->bits_per_raw_sample)
             s->bits_per_raw_sample = avctx->bits_per_raw_sample;
         s->transparency = !!(desc->flags & AV_PIX_FMT_FLAG_ALPHA);
@@ -939,6 +947,10 @@ av_cold int ff_ffv1_encode_setup_plane_info(AVCodecContext *avctx,
 
     if (s->remap_mode < 0)
         s->remap_mode = s->flt ? 2 : 0;
+    if (s->remap_mode == 0 && s->bits_per_raw_sample == 32) {
+        av_log(avctx, AV_LOG_ERROR, "32bit requires remap\n");
+        return AVERROR(EINVAL);
+    }
 
     return av_pix_fmt_get_chroma_sub_sample(pix_fmt, &s->chroma_h_shift, &s->chroma_v_shift);
 }
@@ -960,7 +972,7 @@ static av_cold int encode_init_internal(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
-    if (s->bits_per_raw_sample > (s->version > 3 ? 16 : 8)) {
+    if (s->bits_per_raw_sample > (s->version > 3 ? 16 : 8) && !s->remap_mode) {
         if (s->ac == AC_GOLOMB_RICE) {
             av_log(avctx, AV_LOG_INFO,
                     "high bits_per_raw_sample, forcing range coder\n");
@@ -1149,7 +1161,7 @@ static void choose_rct_params(const FFV1Context *f, FFV1SliceContext *sc,
     sc->slice_rct_ry_coef = rct_y_coeff[best][0];
 }
 
-static void encode_remap(FFV1Context *f, FFV1SliceContext *sc)
+static void encode_histogram_remap(FFV1Context *f, FFV1SliceContext *sc)
 {
     int flip = sc->remap == 2 ? 0x7FFF : 0;
 
@@ -1158,6 +1170,9 @@ static void encode_remap(FFV1Context *f, FFV1SliceContext *sc)
         int lu = 0;
         uint8_t state[2][32];
         int run = 0;
+
+        memset(state, 128, sizeof(state));
+        put_symbol(&sc->c, state[0], 0, 0);
         memset(state, 128, sizeof(state));
         for (int i= 0; i<65536; i++) {
             int ri = i ^ ((i&0x8000) ? 0 : flip);
@@ -1178,6 +1193,300 @@ static void encode_remap(FFV1Context *f, FFV1SliceContext *sc)
             put_symbol(&sc->c, state[lu], run, 0);
     }
 }
+
+static void load_rgb_float32_frame(FFV1Context *f, FFV1SliceContext *sc,
+                                   const uint8_t *src[4],
+                                   int w, int h, const int stride[4])
+{
+    int x, y;
+    int transparency = f->transparency;
+    int i = 0;
+
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            int b, g, r, av_uninit(a);
+
+            g = *((const uint32_t *)(src[0] + x*4 + stride[0]*y));
+            b = *((const uint32_t *)(src[1] + x*4 + stride[1]*y));
+            r = *((const uint32_t *)(src[2] + x*4 + stride[2]*y));
+            if (transparency)
+                a = *((const uint32_t *)(src[3] + x*4 + stride[3]*y));
+
+            if (sc->remap == 2) {
+#define FLIP(f) (((f)&0x80000000) ? (f) : (f)^0x7FFFFFFF);
+                g = FLIP(g);
+                b = FLIP(b);
+                r = FLIP(r);
+            }
+            // We cannot build a histogram as we do for 16bit, we need a bit of magic here
+            // Its possible to reduce the memory needed at the cost of more dereferencing
+            sc->unit[0][i].val = g;
+            sc->unit[0][i].ndx = x + y*w;
+
+            sc->unit[1][i].val = b;
+            sc->unit[1][i].ndx = x + y*w;
+
+            sc->unit[2][i].val = r;
+            sc->unit[2][i].ndx = x + y*w;
+
+            if (transparency) {
+                sc->unit[3][i].val = a;
+                sc->unit[3][i].ndx = x + y*w;
+            }
+            i++;
+        }
+    }
+
+    //TODO switch to radix sort
+#define CMP(A,B) ((A)->val - (int64_t)(B)->val)
+    AV_QSORT(sc->unit[0], i, struct Unit, CMP);
+    AV_QSORT(sc->unit[1], i, struct Unit, CMP);
+    AV_QSORT(sc->unit[2], i, struct Unit, CMP);
+    if (transparency)
+        AV_QSORT(sc->unit[3], i, struct Unit, CMP);
+}
+
+typedef struct RemapEncoderState {
+    int delta_stack[65536];     //We need to encode the run value before the adjustments, this stores the adjustments until we know the length of the run
+    int16_t index_stack[65537]; //only needed with multiple segments
+    uint8_t state[2][3][32];
+    int mul[4096+1];
+    RangeCoder rc;
+    int lu;
+    int run;
+    int64_t last_val;
+    int compact_index;
+    int mul_count;
+    int i;
+    int pixel_num;
+    int p;
+    int current_mul_index;
+} RemapEncoderState;
+
+static inline void copy_state(RemapEncoderState *dst, const RemapEncoderState *src)
+{
+    dst->rc = src->rc;
+    memcpy(dst->mul, src->mul, (src->mul_count + 1) * sizeof(src->mul[0]));
+    memcpy(dst->delta_stack, src->delta_stack, src->run * sizeof(src->delta_stack[0]));
+    memcpy(dst->index_stack, src->index_stack, (src->run + 1) * sizeof(src->index_stack[0]));
+    memcpy(dst->state, src->state, sizeof(dst->state));
+    dst->lu             = src->lu;
+    dst->run            = src->run;
+    dst->last_val       = src->last_val;
+    dst->compact_index  = src->compact_index;
+    dst->mul_count      = src->mul_count;
+    dst->i              = src->i;
+    dst->pixel_num      = src->pixel_num;
+    dst->p              = src->p;
+    dst->current_mul_index = src->current_mul_index;
+}
+
+static inline void encode_mul(RemapEncoderState *s, int mul_index)
+{
+    av_assert2(s->mul[ mul_index ]);
+    if (s->mul[ mul_index ] < 0) {
+        s->mul[ mul_index ] *= -1;
+        put_symbol_inline(&s->rc, s->state[0][2], s->mul[ mul_index ], 0, NULL, NULL);
+    }
+}
+
+static int encode_float32_remap_segment(FFV1SliceContext *sc,
+                                        RemapEncoderState *state_arg, int update, int final)
+{
+    RemapEncoderState s;
+
+    copy_state(&s, state_arg);
+
+    if (s.i == 0) {
+        memset(s.state, 128, sizeof(s.state));
+        put_symbol(&s.rc, s.state[0][0], s.mul_count, 0);
+        memset(s.state, 128, sizeof(s.state));
+        s.last_val = -1;
+        s.compact_index = -1;
+        s.lu = 0;
+        s.run = 0;
+        s.current_mul_index = -1;
+    }
+
+    for (; s.i < s.pixel_num+1; s.i++) {
+        int current_mul = s.current_mul_index < 0 ? 1 : FFABS(s.mul[s.current_mul_index]);
+        int64_t val;
+        if (s.i == s.pixel_num) {
+            if (s.last_val == 0xFFFFFFFF) {
+                break;
+            } else {
+                val = 1LL<<32;
+            }
+        } else
+            val = sc->unit[s.p][s.i].val;
+
+        if (s.last_val != val) {
+            int64_t delta = 0;
+            av_assert2(s.last_val < val);
+            av_assert2(current_mul > 0);
+
+            if (current_mul > 1) {
+                delta = val - s.last_val;
+                val = FFMAX(1, (delta + current_mul/2) / current_mul);
+
+                delta -= val*current_mul;
+                av_assert2(delta <= current_mul/2);
+                av_assert2(delta > -current_mul);
+                val += s.last_val;
+            }
+            av_assert2(s.last_val < val);
+            if (s.lu) {
+                s.index_stack[s.run] = s.current_mul_index;
+                av_assert2(s.run < FF_ARRAY_ELEMS(s.delta_stack));
+                if (val - s.last_val == 1) {
+                    s.delta_stack[s.run] = delta;
+                    s.run ++;
+                    av_assert2(s.i == s.pixel_num || s.last_val + current_mul + delta == sc->unit[s.p][s.i].val);
+                    s.last_val += current_mul + delta;
+                } else {
+                    put_symbol_inline(&s.rc, s.state[s.lu][0], s.run, 0, NULL, NULL);
+
+                    for(int k=0; k<s.run; k++) {
+                        int stack_mul = s.mul[ s.index_stack[k] ];
+                        if (stack_mul>1)
+                            put_symbol_inline(&s.rc, s.state[s.lu][1], s.delta_stack[k], 1, NULL, NULL);
+                        encode_mul(&s, s.index_stack[k+1]);
+                    }
+                    if (s.run == 0)
+                        s.lu ^= 1;
+                    s.run = 0;
+                    s.i--; // we did not encode val so we need to backstep
+                    s.last_val += current_mul;
+                    continue;
+                }
+            } else {
+                av_assert2(s.run == 0);
+                put_symbol_inline(&s.rc, s.state[s.lu][0], val - s.last_val - 1, 0, NULL, NULL);
+
+                if (current_mul > 1)
+                    put_symbol_inline(&s.rc, s.state[s.lu][1], delta, 1, NULL, NULL);
+                if (val - s.last_val == 1)
+                    s.lu ^= 1;
+
+                av_assert2(s.i == s.pixel_num || s.last_val + (val - s.last_val) * current_mul + delta == sc->unit[s.p][s.i].val);
+                if (s.i < s.pixel_num)
+                    s.last_val = sc->unit[s.p][s.i].val;
+            }
+            s.current_mul_index = ((s.last_val + 1) * s.mul_count) >> 32;
+            if (!s.run)
+                encode_mul(&s, s.current_mul_index);
+            s.compact_index ++;
+        }
+        if (final && s.i < s.pixel_num)
+            sc->bitmap[s.p][sc->unit[s.p][s.i].ndx] = s.compact_index;
+    }
+
+    if (update) {
+        copy_state(state_arg, &s);
+    }
+    return get_rac_count(&s.rc);
+}
+
+static void encode_float32_remap(FFV1Context *f, FFV1SliceContext *sc,
+                                 const uint8_t *src[4])
+{
+    RemapEncoderState s;
+    s.pixel_num = sc->slice_width * sc->slice_height;
+
+    av_assert0 (s.pixel_num <= 65536);
+
+    for (int p= 0; p < 1 + 2*f->chroma_planes + f->transparency; p++) {
+        float score_tab[16] = {0};
+        int64_t last_val = -1;
+        int best_index = 0;
+        s.rc = sc->c;
+        s.i = 0;
+        s.p = p;
+
+        s.mul_count = 1;
+
+        for (int i= 0; i<s.pixel_num; i++) {
+            int64_t val = sc->unit[p][i].val;
+            if (val != last_val) {
+                av_assert2(last_val < val);
+                for(int si= 0; si < FF_ARRAY_ELEMS(score_tab); si++) {
+                    int64_t delta = val - last_val;
+                    int mul = last_val < 0 ? 1 : (1<<si);
+                    int64_t cost = FFMAX((delta + mul/2)  / mul, 1);
+                    score_tab[si] += log2(cost) + fabs(delta - cost*mul);
+                }
+                last_val = val;
+            }
+        }
+        for(int si= 1; si < FF_ARRAY_ELEMS(score_tab); si++) {
+            if (score_tab[si] < score_tab[ best_index ])
+                best_index = si;
+        }
+        s.mul[0] = -1 << best_index;
+        s.mul[s.mul_count] = 1;
+
+        encode_float32_remap_segment(sc, &s, 1, 1);
+
+        sc->c = s.rc;
+    }
+}
+
+static int encode_float32_rgb_frame(FFV1Context *f, FFV1SliceContext *sc,
+                                    const uint8_t *src[4],
+                                    int w, int h, const int stride[4], int ac)
+{
+    int x, y, p, i;
+    const int ring_size = f->context_model ? 3 : 2;
+    int32_t *sample[4][3];
+    const int pass1 = !!(f->avctx->flags & AV_CODEC_FLAG_PASS1);
+    int bits   = 16;  //TODO explain this in the specifciation, we have 32bits in but really encode max 16
+    int offset = 1 << bits;
+    int transparency = f->transparency;
+
+    sc->run_index = 0;
+
+    memset(RENAME(sc->sample_buffer), 0, ring_size * MAX_PLANES *
+           (w + 6) * sizeof(*RENAME(sc->sample_buffer)));
+
+    for (y = 0; y < h; y++) {
+        for (i = 0; i < ring_size; i++)
+            for (p = 0; p < MAX_PLANES; p++)
+                sample[p][i]= RENAME(sc->sample_buffer) + p*ring_size*(w+6) + ((h+i-y)%ring_size)*(w+6) + 3;
+
+        for (x = 0; x < w; x++) {
+            int b, g, r, av_uninit(a);
+            g = sc->bitmap[0][x + w*y];
+            b = sc->bitmap[1][x + w*y];
+            r = sc->bitmap[2][x + w*y];
+            if (transparency)
+                a = sc->bitmap[3][x + w*y];
+
+            if (sc->slice_coding_mode != 1) {
+                b -= g;
+                r -= g;
+                g += (b * sc->slice_rct_by_coef + r * sc->slice_rct_ry_coef) >> 2;
+                b += offset;
+                r += offset;
+            }
+
+            sample[0][0][x] = g;
+            sample[1][0][x] = b;
+            sample[2][0][x] = r;
+            sample[3][0][x] = a;
+        }
+        for (p = 0; p < 3 + transparency; p++) {
+            int ret;
+            sample[p][0][-1] = sample[p][1][0  ];
+            sample[p][1][ w] = sample[p][1][w-1];
+            ret = encode_line32(f, sc, f->avctx, w, sample[p], (p + 1) / 2,
+                                bits + (sc->slice_coding_mode != 1), ac, pass1);
+            if (ret < 0)
+                return ret;
+        }
+    }
+    return 0;
+}
+
 
 static int encode_slice(AVCodecContext *c, void *arg)
 {
@@ -1215,6 +1524,10 @@ retry:
     }
 
     if (sc->remap) {
+      //Both the 16bit and 32bit remap do exactly the same thing but with 16bits we can
+      //Implement this using a "histogram" while for 32bit that would be gb sized, thus a more
+      //complex implementation sorting pairs is used.
+      if (f->bits_per_raw_sample != 32) {
         if (f->colorspace == 0 && c->pix_fmt != AV_PIX_FMT_YA8 && c->pix_fmt != AV_PIX_FMT_YAF16) {
             const int cx            = x >> f->chroma_h_shift;
             const int cy            = y >> f->chroma_v_shift;
@@ -1238,7 +1551,11 @@ retry:
         } else
             load_rgb_frame  (f, sc, planes, width, height, p->linesize);
 
-        encode_remap(f, sc);
+        encode_histogram_remap(f, sc);
+      } else {
+            load_rgb_float32_frame(f, sc, planes, width, height, p->linesize);
+            encode_float32_remap(f, sc, planes);
+      }
     }
 
     if (ac == AC_GOLOMB_RICE) {
@@ -1263,6 +1580,8 @@ retry:
     } else if (c->pix_fmt == AV_PIX_FMT_YA8 || c->pix_fmt == AV_PIX_FMT_YAF16) {
         ret  = encode_plane(f, sc, p->data[0] +           ps*x + y*p->linesize[0], width, height, p->linesize[0], 0, 0, 2, ac);
         ret |= encode_plane(f, sc, p->data[0] + (ps>>1) + ps*x + y*p->linesize[0], width, height, p->linesize[0], 1, 1, 2, ac);
+    } else if (f->bits_per_raw_sample == 32) {
+        ret = encode_float32_rgb_frame(f, sc, planes, width, height, p->linesize, ac);
     } else if (f->use32bit) {
         ret = encode_rgb_frame32(f, sc, planes, width, height, p->linesize, ac);
     } else {
@@ -1541,7 +1860,7 @@ const FFCodec ff_ffv1_encoder = {
         AV_PIX_FMT_YUV440P10, AV_PIX_FMT_YUV440P12,
         AV_PIX_FMT_YAF16,
         AV_PIX_FMT_GRAYF16,
-        AV_PIX_FMT_GBRPF16),
+        AV_PIX_FMT_GBRPF16, AV_PIX_FMT_GBRPF32),
     .color_ranges   = AVCOL_RANGE_MPEG,
     .p.priv_class   = &ffv1_class,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_EOF_FLUSH,
