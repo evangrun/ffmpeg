@@ -684,11 +684,6 @@ static int mf_encv_output_adjust(AVCodecContext *avctx, IMFMediaType *type)
         framerate = avctx->framerate;
     } else {
         framerate = av_inv_q(avctx->time_base);
-#if FF_API_TICKS_PER_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
-        framerate.den *= avctx->ticks_per_frame;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
     }
 
 #if CONFIG_D3D11VA
