@@ -623,12 +623,12 @@ av_cold int ff_ffv1_encode_init(AVCodecContext *avctx)
             return AVERROR(EINVAL);
         }
         s->version = avctx->level;
-    }
+    } else if (s->version < 3)
+        s->version = 3;
 
     if (s->ec < 0) {
         if (s->version >= 4) {
             s->ec = 2;
-            s->crcref = 0x7a8c4079;
         } else if (s->version >= 3) {
             s->ec = 1;
         } else
@@ -638,8 +638,10 @@ av_cold int ff_ffv1_encode_init(AVCodecContext *avctx)
     // CRC requires version 3+
     if (s->ec == 1)
         s->version = FFMAX(s->version, 3);
-    if (s->ec == 2)
+    if (s->ec == 2) {
         s->version = FFMAX(s->version, 4);
+        s->crcref = 0x7a8c4079;
+    }
 
     if ((s->version == 2 || s->version>3) && avctx->strict_std_compliance > FF_COMPLIANCE_EXPERIMENTAL) {
         av_log(avctx, AV_LOG_ERROR, "Version 2 or 4 needed for requested features but version 2 or 4 is experimental and not enabled\n");
@@ -838,6 +840,9 @@ av_cold int ff_ffv1_encode_setup_plane_info(AVCodecContext *avctx,
             s->bits_per_raw_sample = 14;
         s->packed_at_lsb = 1;
     case AV_PIX_FMT_GRAY16:
+    case AV_PIX_FMT_P016:
+    case AV_PIX_FMT_P216:
+    case AV_PIX_FMT_P416:
     case AV_PIX_FMT_YUV444P16:
     case AV_PIX_FMT_YUV422P16:
     case AV_PIX_FMT_YUV420P16:
@@ -858,6 +863,9 @@ av_cold int ff_ffv1_encode_setup_plane_info(AVCodecContext *avctx,
         s->version = FFMAX(s->version, 1);
     case AV_PIX_FMT_GRAY8:
     case AV_PIX_FMT_YA8:
+    case AV_PIX_FMT_NV12:
+    case AV_PIX_FMT_NV16:
+    case AV_PIX_FMT_NV24:
     case AV_PIX_FMT_YUV444P:
     case AV_PIX_FMT_YUV440P:
     case AV_PIX_FMT_YUV422P:
@@ -1440,7 +1448,7 @@ static void encode_float32_remap(FFV1Context *f, FFV1SliceContext *sc,
                         cost = FFMAX((delta + mul/2)  / mul, 1);
                         float score = 1;
                         if (mul > 1) {
-                            score *= (fabs(delta - cost*mul)+1);
+                            score *= (FFABS(delta - cost*mul)+1);
                             if (mul_count > 1)
                                 score *= score;
                         }
@@ -1749,7 +1757,11 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     maxsize = ff_ffv1_encode_buffer_size(avctx);
 
     if (maxsize > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE - 32) {
-        av_log(avctx, AV_LOG_WARNING, "Cannot allocate worst case packet size, the encoding could fail\n");
+        FFV1Context *f = avctx->priv_data;
+        if (!f->maxsize_warned) {
+            av_log(avctx, AV_LOG_WARNING, "Cannot allocate worst case packet size, the encoding could fail\n");
+            f->maxsize_warned++;
+        }
         maxsize = INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE - 32;
     }
 

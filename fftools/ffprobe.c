@@ -62,8 +62,6 @@
 #include "libswscale/version.h"
 #include "libswresample/swresample.h"
 #include "libswresample/version.h"
-#include "libpostproc/postprocess.h"
-#include "libpostproc/version.h"
 #include "libavfilter/version.h"
 #include "textformat/avtextformat.h"
 #include "cmdutils.h"
@@ -422,7 +420,7 @@ static void log_callback(void *ptr, int level, const char *fmt, va_list vl)
     avtext_print_string(tfc, k, pbuf.str, 0);     \
 } while (0)
 
-#define print_int(k, v)         avtext_print_integer(tfc, k, v)
+#define print_int(k, v)         avtext_print_integer(tfc, k, v, 0)
 #define print_q(k, v, s)        avtext_print_rational(tfc, k, v, s)
 #define print_str(k, v)         avtext_print_string(tfc, k, v, 0)
 #define print_str_opt(k, v)     avtext_print_string(tfc, k, v, AV_TEXTFORMAT_PRINT_STRING_OPTIONAL)
@@ -2573,7 +2571,6 @@ static void ffprobe_show_library_versions(AVTextFormatContext *tfc)
     SHOW_LIB_VERSION(avfilter,   AVFILTER);
     SHOW_LIB_VERSION(swscale,    SWSCALE);
     SHOW_LIB_VERSION(swresample, SWRESAMPLE);
-    SHOW_LIB_VERSION(postproc,   POSTPROC);
     avtext_print_section_footer(tfc);
 }
 
@@ -3081,6 +3078,8 @@ int main(int argc, char **argv)
 
     init_dynload();
 
+    setvbuf(stderr, NULL, _IONBF, 0); /* win32 runtime needs this */
+
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
 
     options = real_options;
@@ -3161,17 +3160,22 @@ int main(int argc, char **argv)
     }
 
     if (output_filename) {
-        ret = avtextwriter_create_file(&wctx, output_filename, 1);
+        ret = avtextwriter_create_file(&wctx, output_filename);
     } else
         ret = avtextwriter_create_stdout(&wctx);
 
     if (ret < 0)
         goto end;
 
-    if ((ret = avtext_context_open(&tctx, f, wctx, f_args,
-                           sections, FF_ARRAY_ELEMS(sections), show_value_unit,
-                            use_value_prefix, use_byte_value_binary_prefix, use_value_sexagesimal_format,
-                            show_optional_fields, show_data_hash)) >= 0) {
+    AVTextFormatOptions tf_options = {
+        .show_optional_fields = show_optional_fields,
+        .show_value_unit = show_value_unit,
+        .use_value_prefix = use_value_prefix,
+        .use_byte_value_binary_prefix = use_byte_value_binary_prefix,
+        .use_value_sexagesimal_format = use_value_sexagesimal_format,
+    };
+
+    if ((ret = avtext_context_open(&tctx, f, wctx, f_args, sections, FF_ARRAY_ELEMS(sections), tf_options, show_data_hash)) >= 0) {
         if (f == &avtextformatter_xml)
             tctx->string_validation_utf8_flags |= AV_UTF8_FLAG_EXCLUDE_XML_INVALID_CONTROL_CODES;
 
